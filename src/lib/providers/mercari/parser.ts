@@ -14,7 +14,7 @@ export interface MercariParseResult {
 
 interface ParseMercariSearchHtmlOptions {
   statusHint: MercariSearchStatus;
-  source: "http" | "rendered_dom" | "fixture";
+  source: "http" | "rendered_dom" | "playwright" | "fixture";
   includeShops?: boolean;
 }
 

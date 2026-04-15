@@ -1,5 +1,6 @@
 import {
   CurrencyCode,
+  DropReasonSummary,
   ListingType,
   MarketId,
   MarketListing,
@@ -37,6 +38,8 @@ export interface NormalizedListingDraft {
   collectedQuery?: string;
   queryVariantKey?: string;
   rawConfidence?: number;
+  salvaged?: boolean;
+  salvageNotes?: string[];
 }
 
 interface NormalizeRawItemsOptions<TRawItem> {
@@ -88,6 +91,17 @@ function resolveImageUrl(value: string | undefined, market: MarketId): string {
   }
 
   return `https://picsum.photos/seed/${market}-placeholder/480/480`;
+}
+
+function compactComparableText(value: string | undefined): string {
+  if (!value) {
+    return "";
+  }
+
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "");
 }
 
 function resolveListingType(
@@ -148,24 +162,74 @@ function calculateListingConfidence(listing: MarketListing, rawConfidence?: numb
   return Number(Math.min(1, Math.max(0, base)).toFixed(3));
 }
 
+function pushDropReason(
+  target: Map<string, { count: number; examples: string[] }>,
+  reason: string,
+  example?: string,
+) {
+  const entry = target.get(reason) ?? { count: 0, examples: [] };
+  entry.count += 1;
+
+  if (example && entry.examples.length < 3 && !entry.examples.includes(example)) {
+    entry.examples.push(example);
+  }
+
+  target.set(reason, entry);
+}
+
+function toDropReasonSummary(
+  reasons: Map<string, { count: number; examples: string[] }>,
+): DropReasonSummary[] {
+  return [...reasons.entries()]
+    .map(([reason, value]) => ({
+      reason,
+      count: value.count,
+      examples: value.examples,
+    }))
+    .sort((left, right) => {
+      if (right.count !== left.count) {
+        return right.count - left.count;
+      }
+
+      return left.reason.localeCompare(right.reason);
+    });
+}
+
 function finalizeListing(
   market: MarketId,
   queryPlan: SearchQueryPlan,
   draft: NormalizedListingDraft,
   index: number,
-): MarketListing | null {
+): { listing: MarketListing | null; dropReason?: string; salvageNotes: string[] } {
   const title = safeString(draft.title);
   const price = typeof draft.price === "number" && Number.isFinite(draft.price) ? draft.price : null;
   const currency = draft.currency;
   const itemUrl = safeString(draft.itemUrl);
   const imageUrl = safeString(draft.imageUrl);
+  const salvageNotes = draft.salvageNotes?.filter(Boolean) ?? [];
 
-  if (!title || !price || !currency || !itemUrl || !isValidHttpUrl(itemUrl)) {
-    return null;
+  if (!title) {
+    return { listing: null, dropReason: "missing_title", salvageNotes };
+  }
+
+  if (!price) {
+    return { listing: null, dropReason: "missing_price", salvageNotes };
+  }
+
+  if (!currency) {
+    return { listing: null, dropReason: "missing_currency", salvageNotes };
+  }
+
+  if (!itemUrl) {
+    return { listing: null, dropReason: "missing_item_url", salvageNotes };
+  }
+
+  if (!isValidHttpUrl(itemUrl)) {
+    return { listing: null, dropReason: "invalid_item_url", salvageNotes };
   }
 
   if (containsNoiseTerm(title, queryPlan.presetId)) {
-    return null;
+    return { listing: null, dropReason: "noise_listing", salvageNotes };
   }
 
   const soldAt = safeDate(draft.soldAt);
@@ -255,26 +319,70 @@ function finalizeListing(
   };
 
   listing.fieldCompleteness = calculateFieldCompleteness(listing);
-  listing.relevanceScore = computeRelevanceScore(queryPlan.normalized || queryPlan.original, listing, queryPlan.presetId);
-  listing.confidenceScore = calculateListingConfidence(listing, draft.rawConfidence);
+  listing.relevanceScore = computeRelevanceScore(
+    queryPlan.normalized || queryPlan.original,
+    listing,
+    queryPlan.presetId,
+  );
 
-  return listing;
+  if (
+    draft.collectedQuery &&
+    normalizeText(draft.collectedQuery) !== normalizeText(queryPlan.normalized || queryPlan.original)
+  ) {
+    listing.relevanceScore = Number(
+      Math.max(
+        listing.relevanceScore,
+        computeRelevanceScore(draft.collectedQuery, listing, queryPlan.presetId) * 0.98,
+      ).toFixed(3),
+    );
+  }
+
+  const compactCollectedQuery = compactComparableText(draft.collectedQuery);
+  const compactListingText = compactComparableText(`${title} ${normalizedName}`);
+
+  if (compactCollectedQuery && compactListingText.includes(compactCollectedQuery)) {
+    listing.relevanceScore = Number(Math.max(listing.relevanceScore, 0.78).toFixed(3));
+  }
+
+  listing.confidenceScore = calculateListingConfidence(
+    listing,
+    typeof draft.rawConfidence === "number"
+      ? Math.max(0, draft.rawConfidence - (draft.salvaged ? 0.08 : 0))
+      : draft.rawConfidence,
+  );
+
+  return {
+    listing,
+    salvageNotes,
+  };
 }
 
 function buildNormalizationStatus(
   rawCount: number,
   normalizedCount: number,
-  warnings: string[],
+  invalidCount: number,
+  dropReasons: DropReasonSummary[],
 ): ProviderExecutionStatus {
   if (rawCount === 0) {
     return "empty";
   }
 
+  const criticalDropCount = dropReasons
+    .filter((reason) => !["low_relevance", "noise_listing"].includes(reason.reason))
+    .reduce((sum, reason) => sum + reason.count, 0);
+  const hasNormalizationException = dropReasons.some(
+    (reason) => reason.reason === "normalization_exception",
+  );
+
   if (normalizedCount === 0) {
-    return warnings.length > 0 ? "parse_error" : "empty";
+    return criticalDropCount > 0 || invalidCount > 0 ? "parse_error" : "empty";
   }
 
-  if (warnings.length > 0) {
+  if (
+    hasNormalizationException ||
+    invalidCount > Math.max(2, Math.floor(rawCount * 0.2)) ||
+    criticalDropCount > Math.max(2, Math.floor(rawCount * 0.25))
+  ) {
     return "partial";
   }
 
@@ -285,12 +393,15 @@ function buildNormalizationError(
   status: ProviderExecutionStatus,
   warnings: string[],
 ): ProviderErrorInfo | undefined {
+  const meaningfulWarning =
+    warnings.find((warning) => !warning.includes("low_relevance")) ?? warnings[0];
+
   if (status === "parse_error" || status === "parsing_failure") {
     return {
       type: "parse_error",
       message: "Collected rows could not be normalized into comparable listings.",
       retryable: false,
-      details: warnings[0],
+      details: meaningfulWarning,
     };
   }
 
@@ -299,7 +410,7 @@ function buildNormalizationError(
       type: "partial_result",
       message: "Some collected rows were dropped during normalization.",
       retryable: true,
-      details: warnings[0],
+      details: meaningfulWarning,
     };
   }
 
@@ -311,42 +422,95 @@ export function normalizeRawItems<TRawItem>(
 ): NormalizationEnvelope {
   const warnings: string[] = [];
   const listings: MarketListing[] = [];
+  const dropReasons = new Map<string, { count: number; examples: string[] }>();
   let filteredOutCount = 0;
   let invalidCount = 0;
+  let salvagedCount = 0;
 
   options.rawItems.forEach((rawItem, index) => {
     try {
-      const listing = finalizeListing(
+      const finalized = finalizeListing(
         options.market,
         options.queryPlan,
         options.mapRawItem(rawItem, index),
         index,
       );
+      const listing = finalized.listing;
 
       if (!listing) {
         invalidCount += 1;
-        warnings.push(`Skipped ${options.market} raw item at index ${index}.`);
+        pushDropReason(
+          dropReasons,
+          finalized.dropReason ?? "invalid_listing",
+          `index:${index}`,
+        );
         return;
       }
 
-      const normalizedQuery = normalizeText(options.queryPlan.normalized || options.query);
-      if (
-        listing.relevanceScore < options.minRelevanceScore &&
-        !listing.normalizedName.includes(normalizedQuery) &&
-        !matchesSearchQuery(
-          options.queryPlan.normalized || options.query,
+      if (finalized.salvageNotes.length > 0) {
+        salvagedCount += 1;
+      }
+
+      const primaryQuery = options.queryPlan.normalized || options.query;
+      const normalizedQuery = normalizeText(primaryQuery);
+      const collectedQuery = listing.collectedQuery?.trim();
+      const normalizedCollectedQuery = normalizeText(collectedQuery ?? "");
+      const compactPrimaryQuery = compactComparableText(primaryQuery);
+      const compactCollectedQuery = compactComparableText(collectedQuery ?? "");
+      const compactListingText = compactComparableText(
+        `${listing.title} ${listing.normalizedName} ${listing.relatedKeywords.join(" ")}`,
+      );
+      const matchesPrimaryQuery =
+        listing.normalizedName.includes(normalizedQuery) ||
+        (compactPrimaryQuery.length > 0 && compactListingText.includes(compactPrimaryQuery)) ||
+        matchesSearchQuery(
+          primaryQuery,
           `${listing.title} ${listing.normalizedName}`,
           options.queryPlan.presetId,
-        )
+        );
+      const matchesCollectedQuery =
+        Boolean(collectedQuery) &&
+        (listing.normalizedName.includes(normalizedCollectedQuery) ||
+          (compactCollectedQuery.length > 0 &&
+            compactListingText.includes(compactCollectedQuery)) ||
+          matchesSearchQuery(
+            collectedQuery as string,
+            `${listing.title} ${listing.normalizedName}`,
+            options.queryPlan.presetId,
+          ));
+      const allowVariantRescue =
+        Boolean(
+          (listing.queryVariantKey && listing.queryVariantKey !== "original") ||
+            (collectedQuery &&
+              normalizeText(collectedQuery) !== normalizeText(primaryQuery)) ||
+            ((listing.fieldCompleteness ?? 0) >= 0.66 &&
+              listing.confidenceScore >= 0.58 &&
+              listing.relevanceScore >= Math.max(0.16, options.minRelevanceScore * 0.42)),
+        );
+
+      if (
+        listing.relevanceScore < options.minRelevanceScore &&
+        !matchesPrimaryQuery &&
+        !matchesCollectedQuery &&
+        !allowVariantRescue
       ) {
         filteredOutCount += 1;
-        warnings.push(`Filtered ${options.market} item by relevance at index ${index}.`);
+        pushDropReason(
+          dropReasons,
+          "low_relevance",
+          listing.title,
+        );
         return;
       }
 
       listings.push(listing);
     } catch (error) {
       invalidCount += 1;
+      pushDropReason(
+        dropReasons,
+        "normalization_exception",
+        `index:${index}`,
+      );
       warnings.push(
         error instanceof Error
           ? error.message
@@ -355,10 +519,12 @@ export function normalizeRawItems<TRawItem>(
     }
   });
 
+  const dropReasonSummary = toDropReasonSummary(dropReasons);
   const status = buildNormalizationStatus(
     options.rawItems.length,
     listings.length,
-    warnings,
+    invalidCount,
+    dropReasonSummary,
   );
   const confidenceScore =
     listings.length > 0
@@ -369,6 +535,18 @@ export function normalizeRawItems<TRawItem>(
           ).toFixed(3),
         )
       : 0;
+
+  if (salvagedCount > 0) {
+    warnings.push(
+      `Salvaged ${salvagedCount} ${options.market} rows using fallback field rules.`,
+    );
+  }
+
+  dropReasonSummary.slice(0, 4).forEach((reason) => {
+    warnings.push(
+      `Dropped ${reason.count} ${options.market} rows due to ${reason.reason}.`,
+    );
+  });
 
   return {
     market: options.market,
@@ -382,11 +560,13 @@ export function normalizeRawItems<TRawItem>(
       skippedCount: options.rawItems.length - listings.length,
       filteredOutCount,
       invalidCount,
+      salvagedCount,
       activeCount: listings.filter((listing) => listing.listingType === "active").length,
       soldCount: listings.filter((listing) => listing.listingType === "sold").length,
     },
     warnings,
     confidenceScore,
+    dropReasons: dropReasonSummary,
     error: buildNormalizationError(status, warnings),
   };
 }

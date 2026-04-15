@@ -1,8 +1,7 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { execFile } from "node:child_process";
+import path from "node:path";
 import { promisify } from "node:util";
 import { MercariRawListing } from "@/lib/fixtures/types";
 import {
@@ -17,15 +16,22 @@ import {
 } from "@/lib/providers/shared/runtime";
 import {
   MERCARI_BASE_URL,
+  MERCARI_BROWSER_RENDERER,
   MERCARI_BROWSER_TIMEOUT_MS,
   MERCARI_BROWSER_VIRTUAL_TIME_BUDGET_MS,
   MERCARI_CHROME_CANDIDATES,
   MERCARI_DEFAULT_ACCEPT_LANGUAGE,
   MERCARI_DEFAULT_USER_AGENT,
   MERCARI_HTTP_TIMEOUT_MS,
+  MERCARI_MAX_SESSION_RETRIES,
+  MERCARI_REQUEST_FINGERPRINTS,
   MERCARI_REQUEST_INTERVAL_MS,
   MERCARI_SEARCH_PATH,
+  MERCARI_SESSION_COOLDOWN_MS,
+  MERCARI_SESSION_ROOT_DIR,
+  MERCARI_SESSION_WARMUP_TTL_MS,
   MERCARI_WINDOW_SIZE,
+  MercariRequestFingerprint,
 } from "@/lib/providers/mercari/config";
 import {
   MercariParseResult,
@@ -40,9 +46,10 @@ import {
 
 const execFileAsync = promisify(execFile);
 const MERCARI_CACHE_TTL_MS = 45_000;
+const MERCARI_WARMUP_URL = new URL(MERCARI_SEARCH_PATH, MERCARI_BASE_URL).toString();
 
 interface MercariCollectorMeta extends Record<string, unknown> {
-  strategy: "multi_variant_rendered_dom_http";
+  strategy: "multi_variant_session_aware";
   perStatusLimit: number;
   requestCount: number;
   chromeExecutablePath?: string;
@@ -53,26 +60,91 @@ interface MercariCollectorMeta extends Record<string, unknown> {
     variantLabel: string;
     query: string;
     status: MercariSearchStatus;
-    source: "rendered_dom" | "http" | "empty" | "failed";
+    source: "rendered_dom" | "playwright" | "http" | "empty" | "failed";
+    renderer: "chrome_dump_dom" | "playwright" | "http";
     requestedUrl: string;
     totalCells: number;
     parsedCount: number;
     ignoredCells: number;
+    blocked: boolean;
+    blockedReasons: string[];
+    sessionId?: string;
+    fingerprintId?: string;
   }>;
+}
+
+interface MercariSessionState {
+  sessionId: string;
+  fingerprint: MercariRequestFingerprint;
+  profileDir: string;
+  lastUsedAt: number;
+  lastWarmupAt?: number;
+  cooldownUntil?: number;
+  blockedCount: number;
+  lastBlockedReasons: string[];
+}
+
+interface MercariBlockedAnalysis {
+  blocked: boolean;
+  reasons: string[];
+  hasSearchSignals: boolean;
+  hasItemSignals: boolean;
+}
+
+interface MercariBrowserRenderResult {
+  html: string;
+  renderer: "chrome_dump_dom" | "playwright";
+  chromeExecutablePath?: string;
 }
 
 interface MercariStatusCollectionResult {
   items: MercariRawListing[];
   warnings: string[];
-  source: "rendered_dom" | "http" | "empty" | "failed";
+  source: "rendered_dom" | "playwright" | "http" | "empty" | "failed";
+  renderer: "chrome_dump_dom" | "playwright" | "http";
   totalCells: number;
   ignoredCells: number;
   blocked: boolean;
+  blockedReasons: string[];
   chromeExecutablePath?: string;
   requestedUrl: string;
+  requestCount: number;
+  sessionId?: string;
+  fingerprintId?: string;
 }
 
+interface MercariVariantCollectionResult {
+  items: MercariRawListing[];
+  warnings: string[];
+  requestedUrls: string[];
+  activeResult: MercariStatusCollectionResult;
+  soldResult: MercariStatusCollectionResult;
+  status: ProviderExecutionStatus;
+  blockedReasons: string[];
+  requestCount: number;
+  retryCount: number;
+  browserFallbackUsed: boolean;
+  warmupUsed: boolean;
+  chromeExecutablePath?: string;
+  session?: MercariSessionState;
+}
+
+interface WarmupResult {
+  used: boolean;
+  warnings: string[];
+  requestCount: number;
+  browserFallbackUsed: boolean;
+  chromeExecutablePath?: string;
+}
+
+const MERCARI_VARIANT_TIMEOUT_MS = 18_000;
+
 let lastMercariRequestAt = 0;
+let chromeExecutablePathCache: string | null | undefined;
+let mercariFingerprintCursor = 0;
+let playwrightLoadAttempted = false;
+let playwrightModuleCache: unknown | null = null;
+const mercariSessions = new Map<string, MercariSessionState>();
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -89,8 +161,37 @@ async function waitForMercariRateLimit(intervalMs = MERCARI_REQUEST_INTERVAL_MS)
   lastMercariRequestAt = Date.now();
 }
 
+function dedupeStrings(values: Array<string | undefined | null>): string[] {
+  return Array.from(new Set(values.filter((value): value is string => Boolean(value?.trim()))));
+}
+
+function compactWarnings(warnings: string[], limit = 10): string[] {
+  const uniqueWarnings = dedupeStrings(warnings);
+
+  if (uniqueWarnings.length <= limit) {
+    return uniqueWarnings;
+  }
+
+  return [
+    ...uniqueWarnings.slice(0, limit),
+    `[mercari] ${uniqueWarnings.length - limit} additional warnings omitted.`,
+  ];
+}
+
+function hashString(value: string): number {
+  return [...value].reduce((hash, character) => {
+    return (hash * 31 + character.charCodeAt(0)) >>> 0;
+  }, 0);
+}
+
 function resolveChromeExecutablePath(): string | null {
-  return MERCARI_CHROME_CANDIDATES.find((candidate) => existsSync(candidate)) ?? null;
+  if (chromeExecutablePathCache !== undefined) {
+    return chromeExecutablePathCache;
+  }
+
+  chromeExecutablePathCache =
+    MERCARI_CHROME_CANDIDATES.find((candidate) => existsSync(candidate)) ?? null;
+  return chromeExecutablePathCache;
 }
 
 function buildMercariSearchUrl(query: string, status: MercariSearchStatus): string {
@@ -99,91 +200,80 @@ function buildMercariSearchUrl(query: string, status: MercariSearchStatus): stri
   url.searchParams.set("status", status);
   url.searchParams.set("sort", "created_time");
   url.searchParams.set("order", "desc");
-
   return url.toString();
 }
 
-function isBlockedHtml(html: string): boolean {
-  return /captcha|access denied|forbidden|service unavailable|robot/i.test(html);
+function extractVisibleText(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<template[\s\S]*?<\/template>/gi, " ")
+    .replace(/<svg[\s\S]*?<\/svg>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-async function fetchMercariSearchHtml(url: string, timeoutMs: number): Promise<string> {
-  await waitForMercariRateLimit();
+function analyzeMercariBlockedHtml(html: string): MercariBlockedAnalysis {
+  const normalizedHtml = html.toLowerCase();
+  const visibleText = extractVisibleText(html).toLowerCase();
+  const hasItemGrid = /id="item-grid"/i.test(html);
+  const itemCellCount = (html.match(/data-testid="item-cell"/gi) ?? []).length;
+  const itemLinkCount = (html.match(/\/item\/[a-z0-9]+/gi) ?? []).length;
+  const hasItemSignals = hasItemGrid || itemCellCount > 0 || itemLinkCount > 0;
+  const hasSearchSignals =
+    hasItemSignals ||
+    /searchresult|検索結果|絞り込み|販売中|売り切れ|mercari/i.test(visibleText);
+  const reasons: string[] = [];
 
-  const controller = new AbortController();
-  const timeoutHandle = setTimeout(
-    () => controller.abort(),
-    Math.min(timeoutMs, MERCARI_HTTP_TIMEOUT_MS),
-  );
-
-  try {
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": MERCARI_DEFAULT_USER_AGENT,
-        "Accept-Language": MERCARI_DEFAULT_ACCEPT_LANGUAGE,
-        Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Cache-Control": "no-cache",
-      },
-      redirect: "follow",
-      signal: controller.signal,
-      cache: "no-store",
-    });
-
-    if (!response.ok) {
-      throw new Error(`Mercari responded with ${response.status} for ${url}`);
+  if (!hasItemSignals) {
+    if (
+      /challenge-platform|challenge-form|cf-chl|hcaptcha|g-recaptcha|turnstile|arkoselabs|captcha-delivery/i.test(
+        normalizedHtml,
+      )
+    ) {
+      reasons.push("challenge_script");
     }
 
-    return await response.text();
-  } finally {
-    clearTimeout(timeoutHandle);
+    if (
+      /(verify you are human|human verification|security check|access denied|attention required|just a moment|unusual traffic)/i.test(
+        visibleText,
+      )
+    ) {
+      reasons.push("verification_copy");
+    }
+
+    if (
+      /(ロボットではありません|人間であること|セキュリティチェック|本人確認|アクセスを続行するには|しばらくしてからもう一度)/i.test(
+        visibleText,
+      )
+    ) {
+      reasons.push("verification_copy_ja");
+    }
+
+    if (
+      /name="(?:cf-turnstile-response|g-recaptcha-response)"/i.test(html) ||
+      /<form[^>]+(?:captcha|challenge|verify)/i.test(html)
+    ) {
+      reasons.push("challenge_form");
+    }
+
+    if (
+      /<title>\s*(?:just a moment|access denied|attention required|security check)\s*<\/title>/i.test(
+        html,
+      )
+    ) {
+      reasons.push("challenge_title");
+    }
   }
-}
 
-async function renderMercariSearchHtml(url: string, timeoutMs: number) {
-  const chromeExecutablePath = resolveChromeExecutablePath();
-
-  if (!chromeExecutablePath) {
-    throw createProviderError({
-      type: "not_configured",
-      message: "Mercari browser renderer requires Chrome or Edge.",
-      retryable: false,
-    });
-  }
-
-  await waitForMercariRateLimit();
-
-  const profileDir = await mkdtemp(path.join(os.tmpdir(), "mercari-render-"));
-
-  try {
-    const { stdout } = await execFileAsync(
-      chromeExecutablePath,
-      [
-        "--headless=new",
-        "--disable-gpu",
-        `--window-size=${MERCARI_WINDOW_SIZE}`,
-        `--virtual-time-budget=${MERCARI_BROWSER_VIRTUAL_TIME_BUDGET_MS}`,
-        `--user-agent=${MERCARI_DEFAULT_USER_AGENT}`,
-        "--lang=ja-JP",
-        `--user-data-dir=${profileDir}`,
-        "--dump-dom",
-        url,
-      ],
-      {
-        timeout: Math.min(timeoutMs, MERCARI_BROWSER_TIMEOUT_MS),
-        maxBuffer: 12 * 1024 * 1024,
-        windowsHide: true,
-        encoding: "utf8",
-      },
-    );
-
-    return {
-      html: stdout,
-      chromeExecutablePath,
-    };
-  } finally {
-    await rm(profileDir, { recursive: true, force: true }).catch(() => undefined);
-  }
+  return {
+    blocked: !hasItemSignals && reasons.length > 0,
+    reasons: dedupeStrings(reasons),
+    hasSearchSignals,
+    hasItemSignals,
+  };
 }
 
 function annotateItems(
@@ -192,9 +282,11 @@ function annotateItems(
   variantKey: string,
   variantLabel: string,
   rawConfidence: number,
+  parserSource: MercariRawListing["parserSource"],
 ): MercariRawListing[] {
   return items.map((item) => ({
     ...item,
+    parserSource,
     matchedQuery: query,
     queryVariantKey: variantKey,
     queryVariantLabel: variantLabel,
@@ -210,17 +302,428 @@ function buildStatusWarnings(
   return parseResult.warnings.map((warning) => `[mercari:${status}:${sourceLabel}] ${warning}`);
 }
 
-function compactWarnings(warnings: string[], limit = 10): string[] {
-  const uniqueWarnings = [...new Set(warnings)];
+function buildMercariRequestHeaders(
+  fingerprint: MercariRequestFingerprint,
+  referer?: string,
+): HeadersInit {
+  return {
+    "User-Agent": fingerprint.userAgent || MERCARI_DEFAULT_USER_AGENT,
+    "Accept-Language": fingerprint.acceptLanguage || MERCARI_DEFAULT_ACCEPT_LANGUAGE,
+    Accept:
+      "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Cache-Control": "no-cache",
+    Referer: referer ?? MERCARI_WARMUP_URL,
+    ...(fingerprint.headers ?? {}),
+  };
+}
 
-  if (uniqueWarnings.length <= limit) {
-    return uniqueWarnings;
+async function fetchMercariSearchHtml(
+  url: string,
+  timeoutMs: number,
+  fingerprint: MercariRequestFingerprint,
+): Promise<string> {
+  await waitForMercariRateLimit();
+
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(
+    () => controller.abort(),
+    Math.min(timeoutMs, MERCARI_HTTP_TIMEOUT_MS),
+  );
+
+  try {
+    const response = await fetch(url, {
+      headers: buildMercariRequestHeaders(fingerprint, MERCARI_WARMUP_URL),
+      redirect: "follow",
+      signal: controller.signal,
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      throw new Error(`Mercari responded with ${response.status} for ${url}`);
+    }
+
+    return await response.text();
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
+function sanitizeProfileDirectoryName(value: string): string {
+  return value.replace(/[^a-z0-9_-]/gi, "-").replace(/-+/g, "-").toLowerCase();
+}
+
+async function ensureMercariSession(
+  fingerprint: MercariRequestFingerprint,
+): Promise<MercariSessionState> {
+  const sessionId = `mercari-${fingerprint.id}`;
+  const existing = mercariSessions.get(sessionId);
+
+  if (existing) {
+    return existing;
   }
 
-  return [
-    ...uniqueWarnings.slice(0, limit),
-    `[mercari] ${uniqueWarnings.length - limit} additional warnings omitted.`,
+  const profileDir = path.join(
+    MERCARI_SESSION_ROOT_DIR,
+    sanitizeProfileDirectoryName(fingerprint.id),
+  );
+  await mkdir(profileDir, { recursive: true });
+
+  const session: MercariSessionState = {
+    sessionId,
+    fingerprint,
+    profileDir,
+    lastUsedAt: 0,
+    blockedCount: 0,
+    lastBlockedReasons: [],
+  };
+
+  mercariSessions.set(sessionId, session);
+  return session;
+}
+
+async function createMercariAttemptSession(
+  session: MercariSessionState,
+): Promise<MercariSessionState> {
+  await mkdir(session.profileDir, { recursive: true });
+  const attemptProfileDir = await mkdtemp(path.join(session.profileDir, "attempt-"));
+
+  return {
+    ...session,
+    profileDir: attemptProfileDir,
+  };
+}
+
+async function clearMercariProfileLocks(profileDir: string) {
+  const lockFiles = ["SingletonLock", "SingletonCookie", "SingletonSocket"];
+
+  await Promise.all(
+    lockFiles.map((lockFile) =>
+      rm(path.join(profileDir, lockFile), { force: true }).catch(() => undefined),
+    ),
+  );
+}
+
+function parseWindowSize(windowSize: string): { width: number; height: number } {
+  const [width, height] = windowSize.split(",").map((value) => Number(value.trim()));
+  return {
+    width: Number.isFinite(width) && width > 0 ? width : 1600,
+    height: Number.isFinite(height) && height > 0 ? height : 5000,
+  };
+}
+
+async function renderMercariSearchHtmlWithChrome(
+  url: string,
+  timeoutMs: number,
+  session: MercariSessionState,
+): Promise<MercariBrowserRenderResult> {
+  const chromeExecutablePath = resolveChromeExecutablePath();
+
+  if (!chromeExecutablePath) {
+    throw createProviderError({
+      type: "not_configured",
+      message: "Mercari browser renderer requires Chrome or Edge.",
+      retryable: false,
+    });
+  }
+
+  await mkdir(session.profileDir, { recursive: true });
+  await clearMercariProfileLocks(session.profileDir);
+  await waitForMercariRateLimit();
+
+  const rendererScriptPath = path.join(
+    process.cwd(),
+    "scripts",
+    "mercari-dump-dom.mjs",
+  );
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    [rendererScriptPath],
+    {
+      env: {
+        ...process.env,
+        MERCARI_RENDER_CHROME_PATH: chromeExecutablePath,
+        MERCARI_RENDER_URL: url,
+        MERCARI_RENDER_WINDOW_SIZE:
+          session.fingerprint.windowSize ?? MERCARI_WINDOW_SIZE,
+        MERCARI_RENDER_VIRTUAL_TIME_BUDGET: String(
+          MERCARI_BROWSER_VIRTUAL_TIME_BUDGET_MS,
+        ),
+        MERCARI_RENDER_USER_AGENT:
+          session.fingerprint.userAgent || MERCARI_DEFAULT_USER_AGENT,
+        MERCARI_RENDER_PROFILE_DIR: session.profileDir,
+        MERCARI_RENDER_TIMEOUT_MS: String(
+          Math.min(timeoutMs, MERCARI_BROWSER_TIMEOUT_MS),
+        ),
+      },
+      timeout: Math.min(timeoutMs, MERCARI_BROWSER_TIMEOUT_MS) + 2000,
+      maxBuffer: 14 * 1024 * 1024,
+      windowsHide: true,
+      encoding: "utf8",
+    },
+  );
+
+  return {
+    html: stdout,
+    renderer: "chrome_dump_dom",
+    chromeExecutablePath,
+  };
+}
+
+async function loadPlaywrightModule(): Promise<unknown | null> {
+  if (playwrightLoadAttempted) {
+    return playwrightModuleCache;
+  }
+
+  playwrightLoadAttempted = true;
+
+  try {
+    const dynamicImport = Function(
+      "return import('playwright')",
+    ) as () => Promise<unknown>;
+    playwrightModuleCache = await dynamicImport();
+    return playwrightModuleCache;
+  } catch {
+    playwrightModuleCache = null;
+    return null;
+  }
+}
+
+async function renderMercariSearchHtmlWithPlaywright(
+  url: string,
+  timeoutMs: number,
+  session: MercariSessionState,
+): Promise<MercariBrowserRenderResult | null> {
+  const playwright = (await loadPlaywrightModule()) as
+    | {
+        chromium?: {
+          launchPersistentContext: (
+            userDataDir: string,
+            options: Record<string, unknown>,
+          ) => Promise<{
+            pages: () => Array<{
+              goto: (
+                targetUrl: string,
+                options: Record<string, unknown>,
+              ) => Promise<unknown>;
+              waitForLoadState: (
+                state: string,
+                options?: Record<string, unknown>,
+              ) => Promise<unknown>;
+              content: () => Promise<string>;
+            }>;
+            newPage: () => Promise<{
+              goto: (
+                targetUrl: string,
+                options: Record<string, unknown>,
+              ) => Promise<unknown>;
+              waitForLoadState: (
+                state: string,
+                options?: Record<string, unknown>,
+              ) => Promise<unknown>;
+              content: () => Promise<string>;
+            }>;
+            close: () => Promise<void>;
+          }>;
+        };
+      }
+    | null;
+
+  if (!playwright?.chromium) {
+    return null;
+  }
+
+  await mkdir(session.profileDir, { recursive: true });
+  await waitForMercariRateLimit();
+
+  const viewport = parseWindowSize(session.fingerprint.windowSize ?? MERCARI_WINDOW_SIZE);
+  const context = await playwright.chromium.launchPersistentContext(session.profileDir, {
+    headless: true,
+    viewport,
+    locale: "ja-JP",
+    userAgent: session.fingerprint.userAgent || MERCARI_DEFAULT_USER_AGENT,
+    extraHTTPHeaders: buildMercariRequestHeaders(session.fingerprint, MERCARI_WARMUP_URL),
+  });
+
+  try {
+    const existingPage = context.pages()[0];
+    const page = existingPage ?? (await context.newPage());
+    await page.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: Math.min(timeoutMs, MERCARI_BROWSER_TIMEOUT_MS),
+    });
+    await page
+      .waitForLoadState("networkidle", {
+        timeout: Math.min(5000, Math.max(timeoutMs - 1000, 1000)),
+      })
+      .catch(() => undefined);
+
+    return {
+      html: await page.content(),
+      renderer: "playwright",
+    };
+  } finally {
+    await context.close().catch(() => undefined);
+  }
+}
+
+async function maybeWarmMercariSession(
+  session: MercariSessionState,
+  timeoutMs: number,
+): Promise<WarmupResult> {
+  const now = Date.now();
+
+  if (session.blockedCount === 0 && session.lastUsedAt === 0) {
+    return {
+      used: false,
+      warnings: [],
+      requestCount: 0,
+      browserFallbackUsed: false,
+    };
+  }
+
+  if (
+    session.lastWarmupAt &&
+    now - session.lastWarmupAt < MERCARI_SESSION_WARMUP_TTL_MS
+  ) {
+    return {
+      used: false,
+      warnings: [],
+      requestCount: 0,
+      browserFallbackUsed: false,
+    };
+  }
+
+  const warnings: string[] = [];
+  let requestCount = 0;
+  let browserFallbackUsed = false;
+  let chromeExecutablePath: string | undefined;
+
+  try {
+    const rendered = await renderMercariSearchHtmlWithChrome(
+      MERCARI_WARMUP_URL,
+      Math.min(timeoutMs, 10_000),
+      session,
+    );
+    requestCount += 1;
+    chromeExecutablePath = rendered.chromeExecutablePath;
+    session.lastWarmupAt = Date.now();
+
+    return {
+      used: true,
+      warnings,
+      requestCount,
+      browserFallbackUsed,
+      chromeExecutablePath,
+    };
+  } catch (error) {
+    warnings.push(
+      `[mercari:warmup:chrome] ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  if (MERCARI_BROWSER_RENDERER === "chrome") {
+    return {
+      used: false,
+      warnings,
+      requestCount,
+      browserFallbackUsed,
+      chromeExecutablePath,
+    };
+  }
+
+  const playwrightResult = await renderMercariSearchHtmlWithPlaywright(
+    MERCARI_WARMUP_URL,
+    Math.min(timeoutMs, 10_000),
+    session,
+  ).catch((error) => {
+    warnings.push(
+      `[mercari:warmup:playwright] ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return null;
+  });
+
+  if (playwrightResult) {
+    requestCount += 1;
+    browserFallbackUsed = true;
+    session.lastWarmupAt = Date.now();
+  }
+
+  return {
+    used: Boolean(playwrightResult),
+    warnings,
+    requestCount,
+    browserFallbackUsed,
+    chromeExecutablePath,
+  };
+}
+
+function markMercariSessionHealthy(session: MercariSessionState) {
+  session.lastUsedAt = Date.now();
+  session.cooldownUntil = undefined;
+  session.blockedCount = 0;
+  session.lastBlockedReasons = [];
+}
+
+function markMercariSessionBlocked(
+  session: MercariSessionState,
+  reasons: string[],
+) {
+  session.lastUsedAt = Date.now();
+  session.blockedCount += 1;
+  session.lastBlockedReasons = dedupeStrings(reasons);
+  session.cooldownUntil =
+    Date.now() +
+    MERCARI_SESSION_COOLDOWN_MS * Math.min(3, Math.max(session.blockedCount, 1));
+}
+
+async function getMercariSessionCandidates(queryKey: string): Promise<MercariSessionState[]> {
+  const rotationOffset =
+    (hashString(queryKey) + mercariFingerprintCursor) %
+    Math.max(MERCARI_REQUEST_FINGERPRINTS.length, 1);
+  mercariFingerprintCursor =
+    (mercariFingerprintCursor + 1) %
+    Math.max(MERCARI_REQUEST_FINGERPRINTS.length, 1);
+
+  const orderedFingerprints = [
+    ...MERCARI_REQUEST_FINGERPRINTS.slice(rotationOffset),
+    ...MERCARI_REQUEST_FINGERPRINTS.slice(0, rotationOffset),
   ];
+  const sessions = await Promise.all(
+    orderedFingerprints.map((fingerprint) => ensureMercariSession(fingerprint)),
+  );
+  const now = Date.now();
+  const available = sessions.filter(
+    (session) => !session.cooldownUntil || session.cooldownUntil <= now,
+  );
+  const orderedSessions =
+    available.length > 0
+      ? available
+      : [...sessions].sort(
+          (left, right) =>
+            (left.cooldownUntil ?? Number.MAX_SAFE_INTEGER) -
+            (right.cooldownUntil ?? Number.MAX_SAFE_INTEGER),
+        );
+
+  return orderedSessions.slice(0, MERCARI_MAX_SESSION_RETRIES);
+}
+
+function buildMercariStatusResult(
+  requestedUrl: string,
+  options: Partial<MercariStatusCollectionResult>,
+): MercariStatusCollectionResult {
+  return {
+    items: [],
+    warnings: [],
+    source: "failed",
+    renderer: "http",
+    totalCells: 0,
+    ignoredCells: 0,
+    blocked: false,
+    blockedReasons: [],
+    requestedUrl,
+    requestCount: 0,
+    ...options,
+  };
 }
 
 async function collectMercariStatus(
@@ -230,64 +733,136 @@ async function collectMercariStatus(
   timeoutMs: number,
   variantKey: string,
   variantLabel: string,
+  session: MercariSessionState,
 ): Promise<MercariStatusCollectionResult> {
   const requestedUrl = buildMercariSearchUrl(query, status);
   const warnings: string[] = [];
+  let requestCount = 0;
+  let chromeExecutablePath: string | undefined;
 
-  try {
-    const rendered = await renderMercariSearchHtml(requestedUrl, timeoutMs);
+  const tryBrowserParse = (
+    rendered: MercariBrowserRenderResult,
+    parserSource: "rendered_dom" | "playwright",
+  ): MercariStatusCollectionResult | null => {
+    const blockedAnalysis = analyzeMercariBlockedHtml(rendered.html);
+    const sourceLabel =
+      rendered.renderer === "playwright" ? "playwright" : "rendered_dom";
 
-    if (isBlockedHtml(rendered.html)) {
-      return {
-        items: [],
-        warnings: [`[mercari:${status}:rendered_dom] blocked page detected.`],
+    if (blockedAnalysis.blocked) {
+      warnings.push(
+        `[mercari:${status}:${sourceLabel}] blocked markers detected (${blockedAnalysis.reasons.join(", ")}).`,
+      );
+
+      return buildMercariStatusResult(requestedUrl, {
+        warnings: compactWarnings(warnings),
         source: "failed",
-        totalCells: 0,
-        ignoredCells: 0,
+        renderer: rendered.renderer,
         blocked: true,
+        blockedReasons: blockedAnalysis.reasons,
         chromeExecutablePath: rendered.chromeExecutablePath,
-        requestedUrl,
-      };
+        requestCount,
+        sessionId: session.sessionId,
+        fingerprintId: session.fingerprint.id,
+      });
     }
 
-    const parsedFromDom = parseMercariSearchHtml(rendered.html, {
+    const parsedFromBrowser = parseMercariSearchHtml(rendered.html, {
       statusHint: status,
-      source: "rendered_dom",
+      source: parserSource,
     });
 
-    warnings.push(...buildStatusWarnings(status, "rendered_dom", parsedFromDom));
+    warnings.push(...buildStatusWarnings(status, sourceLabel, parsedFromBrowser));
 
-    if (parsedFromDom.items.length > 0 || parsedFromDom.emptyResult || parsedFromDom.foundItemGrid) {
-      return {
-        items: annotateItems(
-          dedupeByKey(parsedFromDom.items, (item) => item.itemId).slice(0, limit),
-          query,
-          variantKey,
-          variantLabel,
-          0.92,
-        ),
-        warnings,
-        source: parsedFromDom.emptyResult ? "empty" : "rendered_dom",
-        totalCells: parsedFromDom.totalCells,
-        ignoredCells: parsedFromDom.ignoredCells,
+    if (
+      parsedFromBrowser.items.length > 0 ||
+      parsedFromBrowser.emptyResult ||
+      parsedFromBrowser.foundItemGrid
+    ) {
+      const annotatedItems = annotateItems(
+        dedupeByKey(parsedFromBrowser.items, (item) => item.itemId).slice(0, limit),
+        query,
+        variantKey,
+        variantLabel,
+        rendered.renderer === "playwright" ? 0.9 : 0.92,
+        parserSource,
+      );
+
+      return buildMercariStatusResult(requestedUrl, {
+        items: annotatedItems,
+        warnings: compactWarnings(warnings),
+        source: parsedFromBrowser.emptyResult ? "empty" : parserSource,
+        renderer: rendered.renderer,
+        totalCells: parsedFromBrowser.totalCells,
+        ignoredCells: parsedFromBrowser.ignoredCells,
         blocked: false,
+        blockedReasons: [],
         chromeExecutablePath: rendered.chromeExecutablePath,
-        requestedUrl,
-      };
+        requestCount,
+        sessionId: session.sessionId,
+        fingerprintId: session.fingerprint.id,
+      });
     }
 
     warnings.push(
-      `[mercari:${status}:rendered_dom] rendered DOM did not expose parseable item cells, falling back to HTTP HTML.`,
+      `[mercari:${status}:${sourceLabel}] browser render did not expose parseable item cells.`,
     );
-  } catch (error) {
-    warnings.push(
-      `[mercari:${status}:rendered_dom] ${error instanceof Error ? error.message : String(error)}`,
-    );
+
+    return null;
+  };
+
+  if (MERCARI_BROWSER_RENDERER !== "playwright") {
+    try {
+      const rendered = await renderMercariSearchHtmlWithChrome(
+        requestedUrl,
+        timeoutMs,
+        session,
+      );
+      requestCount += 1;
+      chromeExecutablePath = rendered.chromeExecutablePath;
+      const parsed = tryBrowserParse(rendered, "rendered_dom");
+
+      if (parsed) {
+        return {
+          ...parsed,
+          requestCount,
+        };
+      }
+    } catch (error) {
+      warnings.push(
+        `[mercari:${status}:rendered_dom] ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  if (MERCARI_BROWSER_RENDERER !== "chrome") {
+    try {
+      const rendered = await renderMercariSearchHtmlWithPlaywright(
+        requestedUrl,
+        timeoutMs,
+        session,
+      );
+
+      if (rendered) {
+        requestCount += 1;
+        const parsed = tryBrowserParse(rendered, "playwright");
+
+        if (parsed) {
+          return {
+            ...parsed,
+            requestCount,
+          };
+        }
+      }
+    } catch (error) {
+      warnings.push(
+        `[mercari:${status}:playwright] ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   try {
     const rawHtmlResult = await retryTask(
-      () => fetchMercariSearchHtml(requestedUrl, timeoutMs),
+      () => fetchMercariSearchHtml(requestedUrl, timeoutMs, session.fingerprint),
       {
         retries: 1,
         delayMs: 250,
@@ -295,57 +870,276 @@ async function collectMercariStatus(
       },
     );
     const rawHtml = rawHtmlResult.value;
+    requestCount += 1;
+    const blockedAnalysis = analyzeMercariBlockedHtml(rawHtml);
 
-    if (isBlockedHtml(rawHtml)) {
-      return {
-        items: [],
-        warnings: [...warnings, `[mercari:${status}:http] blocked page detected.`],
+    if (blockedAnalysis.blocked) {
+      warnings.push(
+        `[mercari:${status}:http] blocked markers detected (${blockedAnalysis.reasons.join(", ")}).`,
+      );
+
+      return buildMercariStatusResult(requestedUrl, {
+        warnings: compactWarnings(warnings),
         source: "failed",
-        totalCells: 0,
-        ignoredCells: 0,
+        renderer: "http",
         blocked: true,
-        requestedUrl,
-      };
+        blockedReasons: blockedAnalysis.reasons,
+        requestCount,
+        sessionId: session.sessionId,
+        fingerprintId: session.fingerprint.id,
+      });
     }
 
     const parsedFromHttp = parseMercariSearchHtml(rawHtml, {
       statusHint: status,
       source: "http",
     });
+    const source =
+      parsedFromHttp.emptyResult
+        ? "empty"
+        : parsedFromHttp.items.length > 0
+          ? "http"
+          : "failed";
 
-    return {
+    return buildMercariStatusResult(requestedUrl, {
       items: annotateItems(
         dedupeByKey(parsedFromHttp.items, (item) => item.itemId).slice(0, limit),
         query,
         variantKey,
         variantLabel,
-        0.82,
+        0.8,
+        "http",
       ),
-      warnings: [...warnings, ...buildStatusWarnings(status, "http", parsedFromHttp)],
-      source:
-        parsedFromHttp.emptyResult
-          ? "empty"
-          : parsedFromHttp.items.length > 0
-            ? "http"
-            : "empty",
+      warnings: compactWarnings([
+        ...warnings,
+        ...buildStatusWarnings(status, "http", parsedFromHttp),
+      ]),
+      source,
+      renderer: "http",
       totalCells: parsedFromHttp.totalCells,
       ignoredCells: parsedFromHttp.ignoredCells,
       blocked: false,
-      requestedUrl,
-    };
+      blockedReasons: [],
+      chromeExecutablePath,
+      requestCount,
+      sessionId: session.sessionId,
+      fingerprintId: session.fingerprint.id,
+    });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-
-    return {
-      items: [],
-      warnings: [...warnings, `[mercari:${status}:http] ${message}`],
+    return buildMercariStatusResult(requestedUrl, {
+      warnings: compactWarnings([
+        ...warnings,
+        `[mercari:${status}:http] ${error instanceof Error ? error.message : String(error)}`,
+      ]),
       source: "failed",
-      totalCells: 0,
-      ignoredCells: 0,
-      blocked: false,
-      requestedUrl,
-    };
+      renderer: "http",
+      requestCount,
+      chromeExecutablePath,
+      sessionId: session.sessionId,
+      fingerprintId: session.fingerprint.id,
+    });
   }
+}
+
+async function collectMercariVariant(
+  query: string,
+  variantKey: string,
+  variantLabel: string,
+  limit: number,
+  timeoutMs: number,
+): Promise<MercariVariantCollectionResult> {
+  const candidateSessions = await getMercariSessionCandidates(`${variantKey}:${query}`);
+  const deadlineAt = Date.now() + timeoutMs - 750;
+  let requestCount = 0;
+  let retryCount = 0;
+  let browserFallbackUsed = false;
+  let warmupUsed = false;
+  let chromeExecutablePath: string | undefined;
+  let lastResult: MercariVariantCollectionResult | undefined;
+
+  for (let sessionIndex = 0; sessionIndex < candidateSessions.length; sessionIndex += 1) {
+    const session = candidateSessions[sessionIndex];
+    const attemptSession = await createMercariAttemptSession(session);
+    const warnings: string[] = [];
+    try {
+      const warmup = await maybeWarmMercariSession(attemptSession, timeoutMs);
+      requestCount += warmup.requestCount;
+      browserFallbackUsed = browserFallbackUsed || warmup.browserFallbackUsed;
+      warmupUsed = warmupUsed || warmup.used;
+      chromeExecutablePath = chromeExecutablePath ?? warmup.chromeExecutablePath;
+      warnings.push(...warmup.warnings);
+
+      const activeTimeoutMs = Math.max(5_000, deadlineAt - Date.now());
+      const activeResult = await collectMercariStatus(
+        query,
+        "on_sale",
+        limit,
+        activeTimeoutMs,
+        variantKey,
+        variantLabel,
+        attemptSession,
+      );
+      const remainingAfterActive = deadlineAt - Date.now();
+      const soldResult =
+        remainingAfterActive >= 18_000
+          ? await collectMercariStatus(
+              query,
+              "sold_out",
+              limit,
+              Math.min(remainingAfterActive, 12_000),
+              variantKey,
+              variantLabel,
+              attemptSession,
+            )
+          : buildMercariStatusResult(buildMercariSearchUrl(query, "sold_out"), {
+              source: "failed",
+              renderer: "http",
+              warnings: [
+                "[mercari:sold_out] skipped sold-out collection to preserve active results within the provider timeout budget.",
+              ],
+              sessionId: session.sessionId,
+              fingerprintId: session.fingerprint.id,
+            });
+
+      requestCount += activeResult.requestCount + soldResult.requestCount;
+      chromeExecutablePath =
+        chromeExecutablePath ??
+        activeResult.chromeExecutablePath ??
+        soldResult.chromeExecutablePath;
+      browserFallbackUsed =
+        browserFallbackUsed ||
+        activeResult.renderer === "playwright" ||
+        soldResult.renderer === "playwright";
+
+      const mergedItems = dedupeByKey(
+        [...activeResult.items, ...soldResult.items],
+        (item) => item.itemId,
+      );
+      const blockedReasons = dedupeStrings([
+        ...activeResult.blockedReasons,
+        ...soldResult.blockedReasons,
+      ]);
+      const status: ProviderExecutionStatus =
+        mergedItems.length > 0
+          ? activeResult.source === "failed" || soldResult.source === "failed"
+            ? "partial"
+            : "success"
+          : blockedReasons.length > 0
+            ? "blocked"
+            : activeResult.source === "empty" && soldResult.source === "empty"
+              ? "empty"
+              : "parse_error";
+
+      warnings.push(...activeResult.warnings, ...soldResult.warnings);
+
+      if (blockedReasons.length > 0) {
+        markMercariSessionBlocked(session, blockedReasons);
+      } else {
+        markMercariSessionHealthy(session);
+      }
+
+      lastResult = {
+        items: mergedItems,
+        warnings: compactWarnings(warnings),
+        requestedUrls: dedupeStrings([
+          activeResult.requestedUrl,
+          soldResult.requestedUrl,
+        ]),
+        activeResult,
+        soldResult,
+        status,
+        blockedReasons,
+        requestCount,
+        retryCount,
+        browserFallbackUsed,
+        warmupUsed,
+        chromeExecutablePath,
+        session,
+      };
+
+      const shouldRetryWithAlternateSession =
+        mergedItems.length === 0 &&
+        sessionIndex < candidateSessions.length - 1 &&
+        (status === "blocked" || status === "parse_error");
+
+      if (shouldRetryWithAlternateSession) {
+        retryCount += 1;
+        continue;
+      }
+
+      return lastResult;
+    } finally {
+      void rm(attemptSession.profileDir, { recursive: true, force: true }).catch(
+        () => undefined,
+      );
+    }
+  }
+
+  return (
+    lastResult ?? {
+      items: [],
+      warnings: ["[mercari] no session candidates were available for the search."],
+      requestedUrls: [],
+      activeResult: buildMercariStatusResult(buildMercariSearchUrl(query, "on_sale"), {
+        source: "failed",
+      }),
+      soldResult: buildMercariStatusResult(buildMercariSearchUrl(query, "sold_out"), {
+        source: "failed",
+      }),
+      status: "error",
+      blockedReasons: [],
+      requestCount,
+      retryCount,
+      browserFallbackUsed,
+      warmupUsed,
+    }
+  );
+}
+
+async function collectMercariVariantWithTimeout(
+  query: string,
+  variantKey: string,
+  variantLabel: string,
+  limit: number,
+  timeoutMs: number,
+): Promise<MercariVariantCollectionResult> {
+  const timeoutWindowMs = Math.min(timeoutMs, MERCARI_VARIANT_TIMEOUT_MS);
+
+  return Promise.race([
+    collectMercariVariant(query, variantKey, variantLabel, limit, timeoutMs),
+    new Promise<MercariVariantCollectionResult>((resolve) => {
+      setTimeout(() => {
+        resolve({
+          items: [],
+          warnings: [
+            `[mercari:${variantKey}] variant collection timed out after ${timeoutWindowMs}ms.`,
+          ],
+          requestedUrls: [
+            buildMercariSearchUrl(query, "on_sale"),
+            buildMercariSearchUrl(query, "sold_out"),
+          ],
+          activeResult: buildMercariStatusResult(buildMercariSearchUrl(query, "on_sale"), {
+            source: "failed",
+            warnings: [
+              `[mercari:on_sale] aborted after ${timeoutWindowMs}ms variant timeout guard.`,
+            ],
+          }),
+          soldResult: buildMercariStatusResult(buildMercariSearchUrl(query, "sold_out"), {
+            source: "failed",
+            warnings: [
+              `[mercari:sold_out] aborted after ${timeoutWindowMs}ms variant timeout guard.`,
+            ],
+          }),
+          status: "timeout",
+          blockedReasons: [],
+          requestCount: 0,
+          retryCount: 0,
+          browserFallbackUsed: false,
+          warmupUsed: false,
+        });
+      }, timeoutWindowMs);
+    }),
+  ]);
 }
 
 export const mercariRealCollector: RawMarketCollector<MercariRawListing, MercariCollectorMeta> = {
@@ -369,39 +1163,40 @@ export const mercariRealCollector: RawMarketCollector<MercariRawListing, Mercari
       const statusResults: MercariCollectorMeta["statusResults"] = [];
       const allWarnings: string[] = [];
       const collectedItems: MercariRawListing[] = [];
+      const blockedReasons: string[] = [];
+      const requestedUrls: string[] = [];
       let totalRetryCount = 0;
       let requestCount = 0;
       let fallbackUsed = false;
-      let blocked = false;
+      let browserFallbackUsed = false;
+      let warmupUsed = false;
       let chromeExecutablePath: string | undefined;
+      let selectedSession: MercariSessionState | undefined;
 
       for (const variant of variants) {
         const attemptStartedAt = Date.now();
-        const [activeResult, soldResult] = await Promise.all([
-          collectMercariStatus(
-            variant.query,
-            "on_sale",
-            perStatusLimit,
-            context.timeoutMs,
-            variant.key,
-            variant.label,
-          ),
-          collectMercariStatus(
-            variant.query,
-            "sold_out",
-            perStatusLimit,
-            context.timeoutMs,
-            variant.key,
-            variant.label,
-          ),
-        ]);
+        const variantResult = await collectMercariVariantWithTimeout(
+          variant.query,
+          variant.key,
+          variant.label,
+          perStatusLimit,
+          context.timeoutMs,
+        );
 
-        requestCount += 2;
-        blocked = blocked || activeResult.blocked || soldResult.blocked;
+        requestCount += variantResult.requestCount;
+        totalRetryCount += variantResult.retryCount;
+        fallbackUsed = fallbackUsed || attempts.length > 0;
+        browserFallbackUsed =
+          browserFallbackUsed || variantResult.browserFallbackUsed;
+        warmupUsed = warmupUsed || variantResult.warmupUsed;
         chromeExecutablePath =
-          chromeExecutablePath ??
-          activeResult.chromeExecutablePath ??
-          soldResult.chromeExecutablePath;
+          chromeExecutablePath ?? variantResult.chromeExecutablePath;
+        selectedSession = variantResult.session ?? selectedSession;
+
+        blockedReasons.push(...variantResult.blockedReasons);
+        requestedUrls.push(...variantResult.requestedUrls);
+        allWarnings.push(...variantResult.warnings);
+        collectedItems.push(...variantResult.items);
 
         statusResults.push(
           {
@@ -409,88 +1204,99 @@ export const mercariRealCollector: RawMarketCollector<MercariRawListing, Mercari
             variantLabel: variant.label,
             query: variant.query,
             status: "on_sale",
-            source: activeResult.source,
-            requestedUrl: activeResult.requestedUrl,
-            totalCells: activeResult.totalCells,
-            parsedCount: activeResult.items.length,
-            ignoredCells: activeResult.ignoredCells,
+            source: variantResult.activeResult.source,
+            renderer: variantResult.activeResult.renderer,
+            requestedUrl: variantResult.activeResult.requestedUrl,
+            totalCells: variantResult.activeResult.totalCells,
+            parsedCount: variantResult.activeResult.items.length,
+            ignoredCells: variantResult.activeResult.ignoredCells,
+            blocked: variantResult.activeResult.blocked,
+            blockedReasons: variantResult.activeResult.blockedReasons,
+            sessionId: variantResult.activeResult.sessionId,
+            fingerprintId: variantResult.activeResult.fingerprintId,
           },
           {
             variantKey: variant.key,
             variantLabel: variant.label,
             query: variant.query,
             status: "sold_out",
-            source: soldResult.source,
-            requestedUrl: soldResult.requestedUrl,
-            totalCells: soldResult.totalCells,
-            parsedCount: soldResult.items.length,
-            ignoredCells: soldResult.ignoredCells,
+            source: variantResult.soldResult.source,
+            renderer: variantResult.soldResult.renderer,
+            requestedUrl: variantResult.soldResult.requestedUrl,
+            totalCells: variantResult.soldResult.totalCells,
+            parsedCount: variantResult.soldResult.items.length,
+            ignoredCells: variantResult.soldResult.ignoredCells,
+            blocked: variantResult.soldResult.blocked,
+            blockedReasons: variantResult.soldResult.blockedReasons,
+            sessionId: variantResult.soldResult.sessionId,
+            fingerprintId: variantResult.soldResult.fingerprintId,
           },
         );
 
-        const mergedItems = dedupeByKey(
-          [...activeResult.items, ...soldResult.items],
-          (item) => item.itemId,
+        const confidenceScore = Number(
+          Math.max(
+            0,
+            Math.min(
+              1,
+              variant.confidence -
+                (attempts.length > 0 ? 0.05 : 0) -
+                variantResult.retryCount * 0.08 -
+                (variantResult.status === "blocked" ? 0.25 : 0) -
+                (variantResult.browserFallbackUsed ? 0.04 : 0),
+            ),
+          ).toFixed(3),
         );
-        const attemptWarnings = [...activeResult.warnings, ...soldResult.warnings];
-        allWarnings.push(...attemptWarnings);
-
-        const attemptStatus: ProviderExecutionStatus =
-          mergedItems.length > 0
-            ? activeResult.source === "failed" || soldResult.source === "failed"
-              ? "partial"
-              : "success"
-            : activeResult.blocked || soldResult.blocked
-              ? "blocked"
-              : activeResult.source === "empty" && soldResult.source === "empty"
-                ? "empty"
-                : "parse_error";
 
         attempts.push({
           variantKey: variant.key,
           variantLabel: variant.label,
           query: variant.query,
-          status: attemptStatus,
-          rawResultCount: mergedItems.length,
+          status: variantResult.status,
+          rawResultCount: variantResult.items.length,
           durationMs: Date.now() - attemptStartedAt,
-          requestedUrls: [activeResult.requestedUrl, soldResult.requestedUrl],
-          warnings: compactWarnings(attemptWarnings, 4),
-          usedFallback: attempts.length > 0,
-          retryCount: 0,
-          confidenceScore: Number(
-            Math.max(0, Math.min(1, variant.confidence - (attempts.length > 0 ? 0.06 : 0)))
-              .toFixed(3),
-          ),
+          requestedUrls: variantResult.requestedUrls,
+          warnings: compactWarnings([
+            ...variantResult.warnings,
+            ...variantResult.blockedReasons.map(
+              (reason) => `[mercari] blocked reason: ${reason}`,
+            ),
+          ], 4),
+          usedFallback: attempts.length > 0 || variantResult.retryCount > 0,
+          retryCount: variantResult.retryCount,
+          confidenceScore,
         });
 
-        totalRetryCount += 0;
-
-        if (attempts.length > 1) {
-          fallbackUsed = true;
-        }
-
-        collectedItems.push(...mergedItems);
-        const dedupedCollected = dedupeByKey(collectedItems, (item) => item.itemId);
+        const dedupedCollected = dedupeByKey(
+          collectedItems,
+          (item) => item.itemId,
+        );
 
         if (
           dedupedCollected.length >= context.limit ||
-          (attempts.length === 1 && dedupedCollected.length >= Math.max(10, Math.ceil(context.limit * 0.7)))
+          (attempts.length === 1 &&
+            dedupedCollected.length >= Math.max(10, Math.ceil(context.limit * 0.7)))
         ) {
           break;
         }
       }
 
-      const rawItems = dedupeByKey(collectedItems, (item) => item.itemId).slice(0, context.limit);
+      const rawItems = dedupeByKey(collectedItems, (item) => item.itemId).slice(
+        0,
+        context.limit,
+      );
       const failedAttempts = attempts.filter((attempt) =>
         ["timeout", "parse_error", "blocked", "error"].includes(attempt.status),
       ).length;
+      const dedupedBlockedReasons = dedupeStrings(blockedReasons);
       const status: ProviderExecutionStatus =
         rawItems.length > 0
           ? failedAttempts > 0
             ? "partial"
             : "success"
-          : blocked
+          : dedupedBlockedReasons.length > 0
             ? "blocked"
+            : attempts.some((attempt) => attempt.status === "timeout")
+              ? "timeout"
             : attempts.some((attempt) => attempt.status === "parse_error")
               ? "parse_error"
               : "empty";
@@ -501,9 +1307,12 @@ export const mercariRealCollector: RawMarketCollector<MercariRawListing, Mercari
                 0,
                 Math.min(
                   1,
-                  attempts.reduce((sum, attempt) => sum + (attempt.confidenceScore ?? 0), 0) /
-                    Math.max(attempts.length, 1) -
-                    (fallbackUsed ? 0.05 : 0),
+                  attempts.reduce(
+                    (sum, attempt) => sum + (attempt.confidenceScore ?? 0),
+                    0,
+                  ) / Math.max(attempts.length, 1) -
+                    (fallbackUsed ? 0.04 : 0) -
+                    dedupedBlockedReasons.length * 0.05,
                 ),
               ).toFixed(3),
             )
@@ -513,9 +1322,18 @@ export const mercariRealCollector: RawMarketCollector<MercariRawListing, Mercari
         status === "blocked"
           ? createProviderError({
               type: "blocked",
-              message: "Mercari blocked the search request or returned an anti-bot page.",
+              message:
+                "Mercari search returned a challenge page before item cells were available.",
               retryable: true,
+              details: dedupedBlockedReasons[0],
             })
+          : status === "timeout"
+            ? createProviderError({
+                type: "timeout",
+                message: "Mercari browser collection exceeded the variant timeout guard.",
+                retryable: true,
+                details: compactWarnings(allWarnings, 1)[0],
+              })
           : status === "parse_error"
             ? createProviderError({
                 type: "parse_error",
@@ -528,7 +1346,11 @@ export const mercariRealCollector: RawMarketCollector<MercariRawListing, Mercari
                   type: "partial_result",
                   message: "Mercari returned only a subset of expected search results.",
                   retryable: true,
-                  details: compactWarnings(allWarnings, 1)[0],
+                  details:
+                    compactWarnings(
+                      [...allWarnings, ...dedupedBlockedReasons],
+                      1,
+                    )[0],
                 })
               : undefined;
 
@@ -540,7 +1362,7 @@ export const mercariRealCollector: RawMarketCollector<MercariRawListing, Mercari
         status,
         rawItems,
         meta: {
-          strategy: "multi_variant_rendered_dom_http",
+          strategy: "multi_variant_session_aware",
           perStatusLimit,
           requestCount,
           chromeExecutablePath,
@@ -556,8 +1378,21 @@ export const mercariRealCollector: RawMarketCollector<MercariRawListing, Mercari
           fallbackUsed,
           cacheHit: false,
           retryCount: totalRetryCount,
-          blocked,
+          blocked: dedupedBlockedReasons.length > 0,
           queryVariantCount: variants.length,
+          summary: {
+            rawCount: rawItems.length,
+            blockedReasons: dedupedBlockedReasons,
+            requestedUrls: dedupeStrings(requestedUrls),
+            sessionId: selectedSession?.sessionId,
+            fingerprintId: selectedSession?.fingerprint.id,
+            fingerprintLabel: selectedSession?.fingerprint.label,
+            cooldownUntil: selectedSession?.cooldownUntil
+              ? new Date(selectedSession.cooldownUntil).toISOString()
+              : undefined,
+            browserFallbackUsed,
+            warmupUsed,
+          },
         },
         error,
         durationMs: Date.now() - startedAt,

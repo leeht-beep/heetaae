@@ -266,6 +266,26 @@ function buildMarketSnapshots(
               filteredOutCount: Math.max(attempt.rawResultCount - normalizedResultCount, 0),
             };
           }),
+          summary: {
+            ...result.collector.debug.summary,
+            rawCount:
+              result.collector.debug.summary?.rawCount ?? result.collector.rawItems.length,
+            normalizedCount: result.normalized.stats.normalizedCount,
+            filteredOutCount: result.normalized.stats.filteredOutCount,
+            invalidCount: result.normalized.stats.invalidCount,
+            salvagedCount: result.normalized.stats.salvagedCount,
+            requestedUrls: Array.from(
+              new Set([
+                ...(result.collector.debug.summary?.requestedUrls ?? []),
+                ...result.collector.debug.attemptedQueries.flatMap(
+                  (attempt) => attempt.requestedUrls ?? [],
+                ),
+              ]),
+            ),
+            dropReasons:
+              result.normalized.dropReasons ??
+              result.collector.debug.summary?.dropReasons,
+          },
         }
       : undefined;
 

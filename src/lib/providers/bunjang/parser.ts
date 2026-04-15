@@ -1,4 +1,5 @@
 import { BunjangRawListing } from "@/lib/fixtures/types";
+import { DropReasonSummary } from "@/lib/types/market";
 import { tokenize } from "@/lib/utils/normalize";
 import {
   BUNJANG_API_BASE_URL,
@@ -26,6 +27,7 @@ export interface BunjangSearchRecord {
   update_time?: string | number;
   category_id?: string | number;
   location?: string;
+  [key: string]: unknown;
 }
 
 export interface BunjangSearchResponse {
@@ -46,6 +48,8 @@ export interface BunjangParseResult {
   adEntries: number;
   ignoredEntries: number;
   malformedEntries: number;
+  salvagedEntries: number;
+  dropReasons: DropReasonSummary[];
   warnings: string[];
   emptyResult: boolean;
 }
@@ -90,6 +94,64 @@ function toNumber(value: unknown): number | null {
   return null;
 }
 
+function pickString(entry: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = toTrimmedString(entry[key]);
+    if (value) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function pickNumber(entry: Record<string, unknown>, keys: string[]): number | null {
+  for (const key of keys) {
+    const value = toNumber(entry[key]);
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function pickStringFromNestedArray(value: unknown): string | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  for (const item of value) {
+    if (typeof item === "string") {
+      const trimmed = item.trim();
+      if (trimmed) {
+        return trimmed;
+      }
+      continue;
+    }
+
+    if (!isRecord(item)) {
+      continue;
+    }
+
+    const candidate =
+      pickString(item, [
+        "url",
+        "image",
+        "image_url",
+        "img_url",
+        "thumbnail",
+        "thumbnail_url",
+      ]) ?? pickStringFromNestedArray(item.images);
+
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  return undefined;
+}
+
 function toIsoFromEpoch(value: unknown): string | undefined {
   const numeric = toNumber(value);
 
@@ -117,14 +179,28 @@ function resolveBunjangImageUrl(value: string | undefined): string | undefined {
     : value;
 }
 
-function normalizeSaleStatus(status: unknown): "SALE" | "SOLD_OUT" {
+function normalizeSaleStatus(
+  status: unknown,
+  entry: Record<string, unknown>,
+): "SALE" | "SOLD_OUT" {
   const normalized = toTrimmedString(status)?.toUpperCase();
 
-  if (!normalized || normalized === "0" || normalized === "SALE" || normalized === "ACTIVE") {
-    return "SALE";
+  if (entry.is_soldout === true || entry.is_sold_out === true || entry.sold_out === true) {
+    return "SOLD_OUT";
   }
 
-  return "SOLD_OUT";
+  if (entry.closed_at || entry.sold_at || entry.completed_at) {
+    return "SOLD_OUT";
+  }
+
+  if (
+    normalized &&
+    ["1", "2", "SOLD", "SOLDOUT", "SOLD_OUT", "COMPLETE", "COMPLETED"].includes(normalized)
+  ) {
+    return "SOLD_OUT";
+  }
+
+  return "SALE";
 }
 
 function appendCategoryMap(
@@ -180,6 +256,130 @@ function isEmptyResultResponse(response: Record<string, unknown>, totalEntries: 
   return totalFound === 0;
 }
 
+function pushDropReason(
+  target: Map<string, { count: number; examples: string[] }>,
+  reason: string,
+  example?: string,
+) {
+  const entry = target.get(reason) ?? { count: 0, examples: [] };
+  entry.count += 1;
+
+  if (example && entry.examples.length < 3 && !entry.examples.includes(example)) {
+    entry.examples.push(example);
+  }
+
+  target.set(reason, entry);
+}
+
+function toDropReasonSummary(
+  reasons: Map<string, { count: number; examples: string[] }>,
+): DropReasonSummary[] {
+  return [...reasons.entries()]
+    .map(([reason, value]) => ({
+      reason,
+      count: value.count,
+      examples: value.examples,
+    }))
+    .sort((left, right) => {
+      if (right.count !== left.count) {
+        return right.count - left.count;
+      }
+
+      return left.reason.localeCompare(right.reason);
+    });
+}
+
+function resolveProductId(entry: Record<string, unknown>): string | undefined {
+  return (
+    pickString(entry, ["pid", "id", "product_id", "productId", "seq"]) ??
+    pickString(entry, ["product_url", "productUrl", "webUrl", "appUrl"])?.match(/products\/(\d+)/i)?.[1]
+  );
+}
+
+function resolveSubject(entry: Record<string, unknown>): string | undefined {
+  return pickString(entry, [
+    "name",
+    "subject",
+    "title",
+    "product_name",
+    "productName",
+    "display_name",
+  ]);
+}
+
+function resolvePrice(entry: Record<string, unknown>): number | null {
+  return pickNumber(entry, [
+    "price",
+    "priceKrw",
+    "price_krw",
+    "sale_price",
+    "salePrice",
+    "selling_price",
+    "trade_price",
+  ]);
+}
+
+function resolveThumbnail(entry: Record<string, unknown>): string | undefined {
+  return resolveBunjangImageUrl(
+    pickString(entry, [
+      "product_image",
+      "thumbnail",
+      "thumbnail_url",
+      "image",
+      "image_url",
+      "imageUrl",
+      "img_url",
+      "imgUrl",
+      "photo_url",
+    ]) ??
+      pickStringFromNestedArray(entry.product_images) ??
+      pickStringFromNestedArray(entry.images),
+  );
+}
+
+function resolveProductUrl(
+  entry: Record<string, unknown>,
+  productId: string | undefined,
+): string | undefined {
+  const direct =
+    pickString(entry, ["product_url", "productUrl", "webUrl", "share_url", "shareUrl"]) ??
+    (productId ? buildBunjangProductUrl(productId) : undefined);
+
+  return direct?.startsWith("http")
+    ? direct
+    : productId
+      ? buildBunjangProductUrl(productId)
+      : undefined;
+}
+
+function resolveCreatedAt(entry: Record<string, unknown>): string | undefined {
+  return (
+    toIsoFromEpoch(entry.update_time) ??
+    toIsoFromEpoch(entry.created_at) ??
+    toIsoFromEpoch(entry.createdAt) ??
+    toIsoFromEpoch(entry.updated_at) ??
+    toIsoFromEpoch(entry.registered_at) ??
+    toIsoFromEpoch(entry.reg_date)
+  );
+}
+
+function resolveClosedAt(entry: Record<string, unknown>): string | undefined {
+  return (
+    toIsoFromEpoch(entry.closed_at) ??
+    toIsoFromEpoch(entry.closedAt) ??
+    toIsoFromEpoch(entry.sold_at) ??
+    toIsoFromEpoch(entry.completed_at)
+  );
+}
+
+function resolveCategoryId(entry: Record<string, unknown>): string | undefined {
+  return pickString(entry, ["category_id", "categoryId", "cate_id", "cateId"]);
+}
+
+function resolveLocation(entry: Record<string, unknown>): string | undefined {
+  return pickString(entry, ["location", "location_name", "region_name", "locationName"]);
+}
+
 export function parseBunjangSearchResponse(
   payload: unknown,
   options: ParseBunjangSearchResponseOptions,
@@ -192,6 +392,8 @@ export function parseBunjangSearchResponse(
       adEntries: 0,
       ignoredEntries: 0,
       malformedEntries: 1,
+      salvagedEntries: 0,
+      dropReasons: [{ reason: "invalid_payload", count: 1 }],
       warnings: ["Bunjang search response is not a JSON object."],
       emptyResult: false,
     };
@@ -210,48 +412,80 @@ export function parseBunjangSearchResponse(
 
   const items: BunjangRawListing[] = [];
   const warnings: string[] = [];
+  const dropReasons = new Map<string, { count: number; examples: string[] }>();
   let productEntries = 0;
   let adEntries = 0;
   let ignoredEntries = 0;
   let malformedEntries = 0;
+  let salvagedEntries = 0;
 
   list.forEach((entry, index) => {
     if (!isRecord(entry)) {
       malformedEntries += 1;
-      warnings.push(`Bunjang search entry at index ${index} is not an object.`);
+      pushDropReason(dropReasons, "invalid_entry", `index:${index}`);
       return;
     }
 
-    const type = toTrimmedString(entry.type)?.toUpperCase() ?? "PRODUCT";
-    if (type !== "PRODUCT") {
-      ignoredEntries += 1;
-      if (type.includes("AD")) {
-        adEntries += 1;
-      }
-      return;
-    }
+    const type = pickString(entry, ["type", "item_type"])?.toUpperCase() ?? "PRODUCT";
 
     if (entry.ad === true) {
       ignoredEntries += 1;
       adEntries += 1;
+      pushDropReason(dropReasons, "ad_entry");
+      return;
+    }
+
+    if (type !== "PRODUCT" && !type.includes("PRODUCT")) {
+      ignoredEntries += 1;
+      if (type.includes("AD")) {
+        adEntries += 1;
+        pushDropReason(dropReasons, "ad_entry");
+      } else {
+        pushDropReason(dropReasons, "non_product_entry", type);
+      }
       return;
     }
 
     productEntries += 1;
 
-    const productId = toTrimmedString(entry.pid);
-    const subject = toTrimmedString(entry.name);
-    const priceKrw = toNumber(entry.price);
-    const thumbnailUrl = resolveBunjangImageUrl(toTrimmedString(entry.product_image));
-    const categoryId = toTrimmedString(entry.category_id);
+    const productId = resolveProductId(entry);
+    const subject = resolveSubject(entry);
+    const priceKrw = resolvePrice(entry);
+    const thumbnailUrl = resolveThumbnail(entry);
+    const productUrl = resolveProductUrl(entry, productId);
+    const categoryId = resolveCategoryId(entry);
     const categoryName = categoryId ? categoryMap.get(categoryId) : undefined;
-    const createdAt = toIsoFromEpoch(entry.update_time);
-    const saleStatus = normalizeSaleStatus(entry.status);
+    const createdAt = resolveCreatedAt(entry);
+    const closedAt = resolveClosedAt(entry);
+    const saleStatus = normalizeSaleStatus(entry.status ?? entry.sale_status, entry);
+    const salvageNotes: string[] = [];
 
-    if (!productId || !subject || !priceKrw || !thumbnailUrl) {
+    if (!productId) {
       malformedEntries += 1;
-      warnings.push(`Bunjang product entry at index ${index} is missing required fields.`);
+      pushDropReason(dropReasons, "missing_product_id", `index:${index}`);
       return;
+    }
+
+    if (!subject) {
+      malformedEntries += 1;
+      pushDropReason(dropReasons, "missing_title", productId);
+      return;
+    }
+
+    if (!priceKrw) {
+      malformedEntries += 1;
+      pushDropReason(dropReasons, "missing_price", subject);
+      return;
+    }
+
+    if (!thumbnailUrl) {
+      salvagedEntries += 1;
+      salvageNotes.push("missing_thumbnail");
+    }
+
+    if (!productUrl) {
+      salvagedEntries += 1;
+      salvageNotes.push("missing_product_url");
     }
 
     items.push({
@@ -259,17 +493,31 @@ export function parseBunjangSearchResponse(
       subject,
       priceKrw,
       thumbnailUrl,
-      productUrl: buildBunjangProductUrl(productId),
+      productUrl: productUrl ?? buildBunjangProductUrl(productId),
       createdAt,
+      closedAt,
       saleStatus,
       parserSource: options.source,
+      salvaged: salvageNotes.length > 0,
+      salvageNotes,
+      parserWarnings: salvageNotes.length > 0 ? [...salvageNotes] : undefined,
       categoryId,
-      locationName: toTrimmedString(entry.location),
+      locationName: resolveLocation(entry),
       spec: {
         categoryName,
       },
       searchKeywords: buildKeywordList(options.query, subject, categoryName, associateKeywords),
     });
+  });
+
+  const dropReasonSummary = toDropReasonSummary(dropReasons);
+
+  if (salvagedEntries > 0) {
+    warnings.push(`Salvaged ${salvagedEntries} Bunjang rows with fallback field rules.`);
+  }
+
+  dropReasonSummary.slice(0, 4).forEach((reason) => {
+    warnings.push(`Dropped ${reason.count} rows due to ${reason.reason}.`);
   });
 
   return {
@@ -279,6 +527,8 @@ export function parseBunjangSearchResponse(
     adEntries,
     ignoredEntries,
     malformedEntries,
+    salvagedEntries,
+    dropReasons: dropReasonSummary,
     warnings,
     emptyResult: isEmptyResultResponse(payload, list.length),
   };
@@ -298,6 +548,8 @@ export function parseBunjangSearchResponseText(
       adEntries: 0,
       ignoredEntries: 0,
       malformedEntries: 1,
+      salvagedEntries: 0,
+      dropReasons: [{ reason: "invalid_json", count: 1 }],
       warnings: [
         error instanceof Error
           ? `Failed to parse Bunjang response JSON: ${error.message}`

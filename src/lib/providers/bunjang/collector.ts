@@ -22,6 +22,7 @@ import {
 } from "@/lib/providers/bunjang/parser";
 import { buildProviderQueryVariants } from "@/lib/utils/query";
 import {
+  DropReasonSummary,
   ProviderExecutionStatus,
   ProviderQueryAttemptDebug,
 } from "@/lib/types/market";
@@ -34,6 +35,9 @@ interface BunjangCollectorMeta extends Record<string, unknown> {
   attemptedQueries: ProviderQueryAttemptDebug[];
   requestedUrls: string[];
   fallbackUsed: boolean;
+  dropReasons?: DropReasonSummary[];
+  malformedCount?: number;
+  salvagedCount?: number;
 }
 
 let lastBunjangRequestAt = 0;
@@ -64,6 +68,42 @@ function compactWarnings(warnings: string[], limit = 8): string[] {
     ...uniqueWarnings.slice(0, limit),
     `[bunjang] ${uniqueWarnings.length - limit} additional warnings omitted.`,
   ];
+}
+
+function mergeDropReasonSummary(
+  target: Map<string, { count: number; examples: string[] }>,
+  reasons: DropReasonSummary[],
+) {
+  reasons.forEach((reason) => {
+    const entry = target.get(reason.reason) ?? { count: 0, examples: [] };
+    entry.count += reason.count;
+
+    (reason.examples ?? []).forEach((example) => {
+      if (entry.examples.length < 3 && !entry.examples.includes(example)) {
+        entry.examples.push(example);
+      }
+    });
+
+    target.set(reason.reason, entry);
+  });
+}
+
+function toDropReasonSummary(
+  reasons: Map<string, { count: number; examples: string[] }>,
+): DropReasonSummary[] {
+  return [...reasons.entries()]
+    .map(([reason, value]) => ({
+      reason,
+      count: value.count,
+      examples: value.examples,
+    }))
+    .sort((left, right) => {
+      if (right.count !== left.count) {
+        return right.count - left.count;
+      }
+
+      return left.reason.localeCompare(right.reason);
+    });
 }
 
 function isBlockedResponse(value: string): boolean {
@@ -138,9 +178,12 @@ export const bunjangRealCollector: RawMarketCollector<BunjangRawListing, Bunjang
       const collectedItems: BunjangRawListing[] = [];
       const requestedUrls: string[] = [];
       const warnings: string[] = [];
+      const dropReasons = new Map<string, { count: number; examples: string[] }>();
       let totalRetryCount = 0;
       let fallbackUsed = false;
       let blocked = false;
+      let malformedCount = 0;
+      let salvagedCount = 0;
 
       for (const variant of variants) {
         const attemptStartedAt = Date.now();
@@ -180,6 +223,13 @@ export const bunjangRealCollector: RawMarketCollector<BunjangRawListing, Bunjang
             query: variant.query,
             source: "api",
           });
+          const criticalDropCount = parsed.dropReasons
+            .filter((reason) => !["ad_entry", "non_product_entry"].includes(reason.reason))
+            .reduce((sum, reason) => sum + reason.count, 0);
+          const dropSummaryWarnings = parsed.dropReasons.slice(0, 3).map((reason) => {
+            const example = reason.examples?.[0] ? ` (${reason.examples[0]})` : "";
+            return `drop:${reason.reason} x${reason.count}${example}`;
+          });
           const items = annotateItems(
             dedupeByKey(parsed.items, (item) => item.productId).slice(0, context.limit),
             variant.query,
@@ -189,14 +239,17 @@ export const bunjangRealCollector: RawMarketCollector<BunjangRawListing, Bunjang
           );
           const attemptStatus: ProviderExecutionStatus =
             parsed.emptyResult || items.length === 0
-              ? parsed.warnings.length > 0 && !parsed.emptyResult
+              ? criticalDropCount > 0 && !parsed.emptyResult
                 ? "parse_error"
                 : "empty"
-              : parsed.malformedEntries > 0
+              : criticalDropCount > Math.max(3, Math.floor(parsed.totalEntries * 0.25))
                 ? "partial"
                 : "success";
 
           warnings.push(...parsed.warnings);
+          mergeDropReasonSummary(dropReasons, parsed.dropReasons);
+          malformedCount += parsed.malformedEntries;
+          salvagedCount += parsed.salvagedEntries;
           collectedItems.push(...items);
           attemptedQueries.push({
             variantKey: variant.key,
@@ -206,10 +259,17 @@ export const bunjangRealCollector: RawMarketCollector<BunjangRawListing, Bunjang
             rawResultCount: items.length,
             durationMs: Date.now() - attemptStartedAt,
             requestedUrls: [requestedUrl],
-            warnings: compactWarnings(parsed.warnings, 4),
+            warnings: compactWarnings([...parsed.warnings, ...dropSummaryWarnings], 4),
             usedFallback: attemptedQueries.length > 0,
             retryCount: response.retryCount,
-            confidenceScore: Number((attemptedQueries.length === 0 ? 0.9 : 0.82).toFixed(3)),
+            confidenceScore: Number(
+              Math.max(
+                0,
+                (attemptedQueries.length === 0 ? 0.9 : 0.82) -
+                  parsed.salvagedEntries * 0.01 -
+                  criticalDropCount * 0.015,
+              ).toFixed(3),
+            ),
           });
 
           if (attemptedQueries.length > 1) {
@@ -269,6 +329,7 @@ export const bunjangRealCollector: RawMarketCollector<BunjangRawListing, Bunjang
               ).toFixed(3),
             )
           : 0;
+      const dropReasonSummary = toDropReasonSummary(dropReasons);
       const error =
         status === "blocked"
           ? createProviderError({
@@ -305,6 +366,9 @@ export const bunjangRealCollector: RawMarketCollector<BunjangRawListing, Bunjang
           attemptedQueries,
           requestedUrls,
           fallbackUsed,
+          dropReasons: dropReasonSummary,
+          malformedCount,
+          salvagedCount,
         },
         warnings: compactWarnings(warnings),
         confidenceScore,
@@ -316,6 +380,13 @@ export const bunjangRealCollector: RawMarketCollector<BunjangRawListing, Bunjang
           retryCount: totalRetryCount,
           blocked,
           queryVariantCount: variants.length,
+          summary: {
+            rawCount: rawItems.length,
+            requestedUrls,
+            invalidCount: malformedCount,
+            salvagedCount,
+            dropReasons: dropReasonSummary,
+          },
         },
         error,
         durationMs: Date.now() - startedAt,

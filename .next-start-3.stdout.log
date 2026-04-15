@@ -1,0 +1,10 @@
+
+> market-resell-web-mvp@0.1.0 start
+> next start --port 3013
+
+   ▲ Next.js 15.5.15
+   - Local:        http://localhost:3013
+   - Network:      http://192.168.3.41:3013
+
+ ✓ Starting...
+ ✓ Ready in 981ms

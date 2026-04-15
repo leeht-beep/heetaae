@@ -17,7 +17,7 @@ export interface MercariRawListing {
   purchasedAt?: string;
   status?: "on_sale" | "sold_out";
   itemType?: "ITEM_TYPE_MERCARI" | "ITEM_TYPE_BEYOND" | string;
-  parserSource?: "http" | "rendered_dom" | "fixture";
+  parserSource?: "http" | "rendered_dom" | "playwright" | "fixture";
   matchedQuery?: string;
   queryVariantKey?: string;
   queryVariantLabel?: string;
@@ -46,6 +46,9 @@ export interface BunjangRawListing {
   queryVariantKey?: string;
   queryVariantLabel?: string;
   rawConfidence?: number;
+  salvaged?: boolean;
+  salvageNotes?: string[];
+  parserWarnings?: string[];
   categoryId?: string;
   locationName?: string;
   spec?: {

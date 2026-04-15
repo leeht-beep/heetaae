@@ -60,6 +60,12 @@ export interface SearchQueryAliasMatch {
   matchedAlias: string;
 }
 
+export interface DropReasonSummary {
+  reason: string;
+  count: number;
+  examples?: string[];
+}
+
 export interface SearchQueryVariant {
   key: string;
   label: string;
@@ -114,6 +120,22 @@ export interface ProviderDebugInfo {
   retryCount: number;
   blocked: boolean;
   queryVariantCount: number;
+  summary?: {
+    rawCount?: number;
+    normalizedCount?: number;
+    filteredOutCount?: number;
+    invalidCount?: number;
+    salvagedCount?: number;
+    dropReasons?: DropReasonSummary[];
+    blockedReasons?: string[];
+    requestedUrls?: string[];
+    sessionId?: string;
+    fingerprintId?: string;
+    fingerprintLabel?: string;
+    cooldownUntil?: string;
+    browserFallbackUsed?: boolean;
+    warmupUsed?: boolean;
+  };
 }
 
 export interface SearchDebugInfo {
@@ -194,6 +216,7 @@ export interface NormalizationStats {
   skippedCount: number;
   filteredOutCount: number;
   invalidCount: number;
+  salvagedCount: number;
   activeCount: number;
   soldCount: number;
 }
@@ -207,6 +230,7 @@ export interface NormalizationEnvelope {
   stats: NormalizationStats;
   warnings: string[];
   confidenceScore: number;
+  dropReasons?: DropReasonSummary[];
   error?: ProviderErrorInfo;
 }
 

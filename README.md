@@ -66,6 +66,7 @@ What changed:
 
 - Stronger blocked detection based on challenge markers plus missing item signals
 - Mercari now defaults to a Playwright-based renderer using the local Chrome/Edge binary for real searches
+- Playwright collection now extracts item cards from live DOM first, then falls back to HTML parsing only when needed
 - Mercari query variants are ordered for stability first: original query, brand/model variants, then localized Japanese fallbacks
 - Sold-out scraping is skipped when the active search already consumed most of the provider budget, so active results return reliably instead of timing out
 - Session metadata and fingerprint rotation remain available for fallback and debug

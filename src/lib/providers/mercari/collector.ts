@@ -34,8 +34,10 @@ import {
   MercariRequestFingerprint,
 } from "@/lib/providers/mercari/config";
 import {
+  MercariDomCardSnapshot,
   MercariParseResult,
   MercariSearchStatus,
+  parseMercariDomCards,
   parseMercariSearchHtml,
 } from "@/lib/providers/mercari/parser";
 import { buildProviderQueryVariants } from "@/lib/utils/query";
@@ -99,6 +101,10 @@ interface MercariBrowserRenderResult {
   html: string;
   renderer: "chrome_dump_dom" | "playwright";
   chromeExecutablePath?: string;
+  domCards?: MercariDomCardSnapshot[];
+  foundItemGrid?: boolean;
+  emptyResult?: boolean;
+  extractionWarnings?: string[];
 }
 
 interface MercariStatusCollectionResult {
@@ -519,7 +525,7 @@ async function renderMercariSearchHtmlWithPlaywright(
               pageFunction: () => boolean,
               options?: Record<string, unknown>,
             ) => Promise<unknown>;
-            addInitScript: (script: () => void) => Promise<unknown>;
+            evaluate: <T>(pageFunction: () => T) => Promise<T>;
             content: () => Promise<string>;
           }>;
           close: () => Promise<void>;
@@ -575,6 +581,58 @@ async function renderMercariSearchHtmlWithPlaywright(
       )
       .catch(() => undefined);
 
+    const domSnapshot = await page.evaluate(() => {
+      const textOf = (value: string | null | undefined) => value?.replace(/\s+/g, " ").trim() ?? "";
+      const cardElements = Array.from(
+        document.querySelectorAll<HTMLElement>('[data-testid="item-cell"]'),
+      );
+      const cards = cardElements.map((card) => {
+        const anchor =
+          card.querySelector<HTMLAnchorElement>('a[href*="/item/"]') ??
+          card.closest<HTMLAnchorElement>('a[href*="/item/"]');
+        const image =
+          card.querySelector<HTMLImageElement>("img") ??
+          anchor?.querySelector<HTMLImageElement>("img") ??
+          null;
+        const priceText =
+          Array.from(card.querySelectorAll<HTMLElement>("span, div, p"))
+            .map((element) => textOf(element.textContent))
+            .find((text) => /(?:¥|￥)\s*[\d,]+/.test(text)) ?? textOf(card.textContent);
+        const soldBadgeText = Array.from(card.querySelectorAll<HTMLElement>("span, div, p"))
+          .map((element) => textOf(element.textContent))
+          .find((text) => /sold|売り切れ/i.test(text));
+
+        return {
+          href: anchor?.getAttribute("href") ?? anchor?.href ?? undefined,
+          titleText:
+            image?.getAttribute("alt") ??
+            anchor?.getAttribute("aria-label") ??
+            textOf(anchor?.textContent) ??
+            textOf(card.textContent),
+          priceText,
+          imageUrl:
+            image?.getAttribute("src") ??
+            image?.getAttribute("data-src") ??
+            image?.getAttribute("srcset") ??
+            undefined,
+          soldBadgeText,
+          textContent: textOf(card.textContent),
+        };
+      });
+      const bodyText = textOf(document.body?.innerText);
+
+      return {
+        cards,
+        foundItemGrid:
+          Boolean(document.querySelector("#item-grid")) || cardElements.length > 0,
+        emptyResult:
+          cards.length === 0 &&
+          /(no results|検索結果はありません|該当する商品が見つかりませんでした|見つかりませんでした)/i.test(
+            bodyText,
+          ),
+      };
+    });
+
     const html = await page.content();
     await context.close().catch(() => undefined);
 
@@ -582,6 +640,9 @@ async function renderMercariSearchHtmlWithPlaywright(
       html,
       renderer: "playwright",
       chromeExecutablePath,
+      domCards: domSnapshot.cards,
+      foundItemGrid: domSnapshot.foundItemGrid,
+      emptyResult: domSnapshot.emptyResult,
     };
   } finally {
     await browser.close().catch(() => undefined);
@@ -818,10 +879,19 @@ async function collectMercariStatus(
       });
     }
 
-    const parsedFromBrowser = parseMercariSearchHtml(rendered.html, {
-      statusHint: status,
-      source: parserSource,
-    });
+    const parsedFromBrowser =
+      rendered.renderer === "playwright" && rendered.domCards
+        ? parseMercariDomCards(rendered.domCards, {
+            statusHint: status,
+            source: parserSource,
+            foundItemGrid: rendered.foundItemGrid,
+            emptyResult: rendered.emptyResult,
+            warnings: rendered.extractionWarnings,
+          })
+        : parseMercariSearchHtml(rendered.html, {
+            statusHint: status,
+            source: parserSource,
+          });
 
     warnings.push(...buildStatusWarnings(status, sourceLabel, parsedFromBrowser));
 

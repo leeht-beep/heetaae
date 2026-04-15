@@ -12,10 +12,25 @@ export interface MercariParseResult {
   emptyResult: boolean;
 }
 
+export interface MercariDomCardSnapshot {
+  href?: string;
+  titleText?: string;
+  priceText?: string;
+  imageUrl?: string;
+  soldBadgeText?: string;
+  textContent?: string;
+}
+
 interface ParseMercariSearchHtmlOptions {
   statusHint: MercariSearchStatus;
   source: "http" | "rendered_dom" | "playwright" | "fixture";
   includeShops?: boolean;
+}
+
+interface ParseMercariDomCardsOptions extends ParseMercariSearchHtmlOptions {
+  foundItemGrid?: boolean;
+  emptyResult?: boolean;
+  warnings?: string[];
 }
 
 const ITEM_GRID_PATTERN =
@@ -26,8 +41,10 @@ const GENERIC_ITEM_LINK_PATTERN =
 const ITEM_IMAGE_ALT_PATTERN = /<img[^>]+alt="([^"]*)"/i;
 const ITEM_IMAGE_SRC_PATTERN = /<img[^>]+(?:src|data-src)="([^"]+)"/i;
 const ITEM_IMAGE_SRCSET_PATTERN = /<img[^>]+srcset="([^"]+)"/i;
-const ITEM_PRICE_PATTERN = /(?:¥|&yen;|￥)\s*([\d,]+)/i;
-const NUMBER_PATTERN = /([\d,]+)/;
+const PRICE_WITH_SYMBOL_PATTERN = /(?:¥|￥|&yen;)\s*([\d,]+)/i;
+const PRICE_FALLBACK_PATTERN = /\b([\d,]{3,})\b/;
+const EMPTY_RESULT_PATTERN =
+  /(no results|検索結果はありません|該当する商品が見つかりませんでした|見つかりませんでした)/i;
 
 function decodeHtmlEntities(value: string): string {
   return value
@@ -57,7 +74,7 @@ function extractVisibleText(html: string): string {
 function cleanTitle(value: string): string {
   return normalizeWhitespace(value)
     .replace(/^\s*(?:Mercari|メルカリ)\s+/i, "")
-    .replace(/\s+(?:¥|￥)\s*[\d,]+.*$/i, "")
+    .replace(/\s+(?:¥|￥|&yen;)\s*[\d,]+.*$/i, "")
     .trim();
 }
 
@@ -87,8 +104,42 @@ function extractImageUrl(cellHtml: string): string | undefined {
     .filter(Boolean)[0];
 }
 
-function parsePriceYen(cellHtml: string): number | null {
-  const priceMatch = cellHtml.match(ITEM_PRICE_PATTERN)?.[1] ?? cellHtml.match(NUMBER_PATTERN)?.[1];
+function normalizeImageUrl(value?: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const trimmed = decodeHtmlEntities(value).trim();
+
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (trimmed.includes(",")) {
+    const firstSrc = trimmed
+      .split(",")
+      .map((part) => part.trim().split(/\s+/)[0])
+      .find(Boolean);
+
+    return normalizeImageUrl(firstSrc);
+  }
+
+  if (trimmed.startsWith("//")) {
+    return `https:${trimmed}`;
+  }
+
+  try {
+    return new URL(trimmed, MERCARI_BASE_URL).toString();
+  } catch {
+    return trimmed;
+  }
+}
+
+function parsePriceYenFromText(value?: string): number | null {
+  const normalizedText = normalizeWhitespace(value ?? "");
+  const priceMatch =
+    normalizedText.match(PRICE_WITH_SYMBOL_PATTERN)?.[1] ??
+    normalizedText.match(PRICE_FALLBACK_PATTERN)?.[1];
   const normalized = (priceMatch ?? "").replace(/[^\d]/g, "");
 
   if (!normalized) {
@@ -99,23 +150,36 @@ function parsePriceYen(cellHtml: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function resolveListingType(cellHtml: string, statusHint: MercariSearchStatus) {
+function resolveListingType(
+  statusHint: MercariSearchStatus,
+  textContent?: string,
+  soldBadgeText?: string,
+) {
   if (statusHint === "sold_out") {
     return "sold_out" as const;
   }
 
-  if (/sold|売り切れ|thumbnail-sticker/i.test(cellHtml)) {
+  const mergedText = `${textContent ?? ""} ${soldBadgeText ?? ""}`;
+
+  if (/sold|売り切れ|thumbnail-sticker/i.test(mergedText)) {
     return "sold_out" as const;
   }
 
   return "on_sale" as const;
 }
 
-function buildListingFromFragment(
-  cellHtml: string,
+function buildMercariListingFromParts(
+  parts: {
+    href?: string;
+    titleText?: string;
+    priceText?: string;
+    imageUrl?: string;
+    textContent?: string;
+    soldBadgeText?: string;
+  },
   options: ParseMercariSearchHtmlOptions,
 ): { listing?: MercariRawListing; ignored?: string } {
-  const href = cellHtml.match(/href="([^"]*\/item\/[^"]+)"/i)?.[1];
+  const href = parts.href?.trim();
 
   if (!href) {
     return { ignored: "Mercari item fragment is missing an item URL." };
@@ -126,13 +190,9 @@ function buildListingFromFragment(
   }
 
   const itemId = href.match(/\/item\/([^/?"]+)/i)?.[1];
-  const titleText = cleanTitle(
-    cellHtml.match(ITEM_IMAGE_ALT_PATTERN)?.[1] ??
-      cellHtml.match(/aria-label="([^"]+)"/i)?.[1] ??
-      extractVisibleText(cellHtml),
-  );
-  const priceJpy = parsePriceYen(cellHtml);
-  const imageUrl = extractImageUrl(cellHtml);
+  const titleText = cleanTitle(parts.titleText ?? parts.textContent ?? "");
+  const priceJpy = parsePriceYenFromText(parts.priceText ?? parts.textContent);
+  const imageUrl = normalizeImageUrl(parts.imageUrl);
 
   if (!itemId || !titleText || !priceJpy || !imageUrl) {
     return {
@@ -147,10 +207,66 @@ function buildListingFromFragment(
       priceJpy,
       primaryImageUrl: imageUrl,
       itemUrl: toAbsoluteMercariUrl(href),
-      status: resolveListingType(cellHtml, options.statusHint),
+      status: resolveListingType(options.statusHint, parts.textContent, parts.soldBadgeText),
       itemType: "ITEM_TYPE_MERCARI",
       parserSource: options.source,
     },
+  };
+}
+
+function buildListingFromFragment(
+  cellHtml: string,
+  options: ParseMercariSearchHtmlOptions,
+): { listing?: MercariRawListing; ignored?: string } {
+  const href = cellHtml.match(/href="([^"]*\/item\/[^"]+)"/i)?.[1];
+
+  return buildMercariListingFromParts(
+    {
+      href,
+      titleText:
+        cellHtml.match(ITEM_IMAGE_ALT_PATTERN)?.[1] ??
+        cellHtml.match(/aria-label="([^"]+)"/i)?.[1] ??
+        extractVisibleText(cellHtml),
+      priceText: extractVisibleText(cellHtml),
+      imageUrl: extractImageUrl(cellHtml),
+      textContent: extractVisibleText(cellHtml),
+    },
+    options,
+  );
+}
+
+export function parseMercariDomCards(
+  cards: MercariDomCardSnapshot[],
+  options: ParseMercariDomCardsOptions,
+): MercariParseResult {
+  const warnings = [...(options.warnings ?? [])];
+  const items: MercariRawListing[] = [];
+  const seenIds = new Set<string>();
+  let ignoredCells = 0;
+
+  cards.forEach((card) => {
+    const parsed = buildMercariListingFromParts(card, options);
+
+    if (parsed.listing?.itemId && !seenIds.has(parsed.listing.itemId)) {
+      seenIds.add(parsed.listing.itemId);
+      items.push(parsed.listing);
+      return;
+    }
+
+    ignoredCells += 1;
+
+    if (parsed.ignored) {
+      warnings.push(parsed.ignored);
+    }
+  });
+
+  return {
+    items,
+    totalCells: cards.length,
+    ignoredCells,
+    warnings,
+    foundItemGrid: options.foundItemGrid ?? cards.length > 0,
+    emptyResult: options.emptyResult ?? false,
   };
 }
 
@@ -169,11 +285,7 @@ export function parseMercariSearchHtml(
       ? directCells
       : [...scopedHtml.matchAll(GENERIC_ITEM_LINK_PATTERN)].map((match) => match[0]);
   const visibleText = extractVisibleText(html);
-  const emptyResult =
-    fallbackCells.length === 0 &&
-    /(no results|검색 결과가 없습니다|該当する商品が見つかりません|お探しの商品は見つかりません)/i.test(
-      visibleText,
-    );
+  const emptyResult = fallbackCells.length === 0 && EMPTY_RESULT_PATTERN.test(visibleText);
   let ignoredCells = 0;
 
   fallbackCells.forEach((cellHtml) => {

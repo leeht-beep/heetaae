@@ -4,20 +4,38 @@ export type CurrencyCode = "JPY" | "KRW";
 export type TrendDirection = "up" | "flat" | "down";
 export type RecommendationGrade = "S" | "A" | "B" | "C";
 export type ProviderMode = "mock" | "real";
+export type AliasLanguage = "ko" | "en" | "ja";
+export type CategoryPresetId = "fashion" | "camera" | "vintage_furniture";
+export type CategoryPresetSource = "default" | "query" | "user";
+export type QueryVariantStrategy =
+  | "original"
+  | "brand_model"
+  | "localized_brand_model"
+  | "brand_only"
+  | "model_only"
+  | "core_tokens"
+  | "brand_category"
+  | "brand_alias"
+  | "model_alias"
+  | "category_alias";
 export type ProviderExecutionStatus =
   | "success"
   | "empty"
   | "partial"
   | "timeout"
+  | "parse_error"
   | "parsing_failure"
+  | "blocked"
   | "error";
 export type ProviderErrorType =
   | "timeout"
   | "empty_result"
   | "partial_result"
+  | "parse_error"
   | "parsing_failure"
   | "network_error"
   | "not_configured"
+  | "blocked"
   | "unknown";
 export type ResultTab =
   | "recommended"
@@ -33,6 +51,76 @@ export interface CostSettings {
   extraCosts: number;
   platformFeeRate: number;
   targetMarginRate: number;
+}
+
+export interface SearchQueryAliasMatch {
+  kind: "brand" | "model" | "category";
+  key: string;
+  canonical: string;
+  matchedAlias: string;
+}
+
+export interface SearchQueryVariant {
+  key: string;
+  label: string;
+  strategy: QueryVariantStrategy;
+  query: string;
+  confidence: number;
+  tokens: string[];
+  providerTargets: Array<MarketId | "shared">;
+  languages?: AliasLanguage[];
+}
+
+export interface SearchQueryPlan {
+  original: string;
+  normalized: string;
+  compact: string;
+  tokens: string[];
+  presetId: CategoryPresetId;
+  presetSource: CategoryPresetSource;
+  brand?: string;
+  model?: string;
+  category?: string;
+  size?: string;
+  season?: string;
+  languageHints: Array<AliasLanguage | "mixed">;
+  aliasMatches: SearchQueryAliasMatch[];
+  variants: SearchQueryVariant[];
+  alternativeSuggestions: string[];
+}
+
+export interface ProviderQueryAttemptDebug {
+  variantKey: string;
+  variantLabel: string;
+  query: string;
+  status: ProviderExecutionStatus;
+  rawResultCount: number;
+  normalizedResultCount?: number;
+  filteredOutCount?: number;
+  confidenceScore?: number;
+  durationMs: number;
+  requestedUrls?: string[];
+  warnings: string[];
+  usedFallback: boolean;
+  retryCount: number;
+  cacheHit?: boolean;
+}
+
+export interface ProviderDebugInfo {
+  market: MarketId;
+  attemptedQueries: ProviderQueryAttemptDebug[];
+  fallbackUsed: boolean;
+  cacheHit: boolean;
+  retryCount: number;
+  blocked: boolean;
+  queryVariantCount: number;
+}
+
+export interface SearchDebugInfo {
+  cacheHit: boolean;
+  totalDurationMs: number;
+  queryPlan: SearchQueryPlan;
+  providerDebug: ProviderDebugInfo[];
 }
 
 export interface MarketListing {
@@ -53,15 +141,25 @@ export interface MarketListing {
   season?: string;
   category: string;
   relevanceScore: number;
+  confidenceScore: number;
   normalizedName: string;
   relatedKeywords: string[];
   dateConfidence?: "observed" | "fallback";
   priceKrw?: number;
+  collectedQuery?: string;
+  queryVariantKey?: string;
+  fieldCompleteness?: number;
 }
 
 export type MockMarketListing = Omit<
   MarketListing,
-  "searchTerm" | "relevanceScore" | "priceKrw"
+  | "searchTerm"
+  | "relevanceScore"
+  | "confidenceScore"
+  | "priceKrw"
+  | "collectedQuery"
+  | "queryVariantKey"
+  | "fieldCompleteness"
 >;
 
 export interface ProviderErrorInfo {
@@ -85,6 +183,8 @@ export interface RawCollectorEnvelope<
   rawItems: TRawItem[];
   meta: TMeta;
   warnings: string[];
+  confidenceScore?: number;
+  debug?: ProviderDebugInfo;
   error?: ProviderErrorInfo;
 }
 
@@ -92,6 +192,8 @@ export interface NormalizationStats {
   receivedCount: number;
   normalizedCount: number;
   skippedCount: number;
+  filteredOutCount: number;
+  invalidCount: number;
   activeCount: number;
   soldCount: number;
 }
@@ -104,6 +206,7 @@ export interface NormalizationEnvelope {
   listings: MarketListing[];
   stats: NormalizationStats;
   warnings: string[];
+  confidenceScore: number;
   error?: ProviderErrorInfo;
 }
 
@@ -118,7 +221,9 @@ export interface MarketCollectionSummary {
   activeListingCount: number;
   soldListingCount: number;
   durationMs: number;
+  confidenceScore: number;
   warnings: string[];
+  debug?: ProviderDebugInfo;
   error?: ProviderErrorInfo;
 }
 
@@ -216,6 +321,8 @@ export interface SearchResponse {
   generatedAt: string;
   costs: CostSettings;
   providerMode: ProviderMode;
+  queryPlan: SearchQueryPlan;
+  alternativeQueries: string[];
   marketResults: MarketProviderResultSnapshot[];
   hasPartialFailures: boolean;
   hasAnySuccessfulMarket: boolean;
@@ -226,4 +333,5 @@ export interface SearchResponse {
   profitProjection: ProfitProjection;
   recommendation: RecommendationResult;
   dashboard: DashboardSummary;
+  debug?: SearchDebugInfo;
 }

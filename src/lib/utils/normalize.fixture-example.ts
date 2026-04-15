@@ -38,6 +38,7 @@ function createFixtureListing(
     season,
     category,
     relevanceScore: overrides.relevanceScore ?? 0,
+    confidenceScore: overrides.confidenceScore ?? 0.88,
     normalizedName:
       overrides.normalizedName ??
       buildNormalizedName({
@@ -51,6 +52,9 @@ function createFixtureListing(
     relatedKeywords: overrides.relatedKeywords ?? [brand, model, category].filter(Boolean),
     dateConfidence: overrides.dateConfidence ?? "observed",
     priceKrw: overrides.priceKrw,
+    collectedQuery: overrides.collectedQuery ?? FIXTURE_QUERY,
+    queryVariantKey: overrides.queryVariantKey ?? "original",
+    fieldCompleteness: overrides.fieldCompleteness ?? 1,
   };
 }
 
@@ -79,7 +83,7 @@ const bunjangComparable = createFixtureListing("fixture-bunjang", {
 
 const noisyWantedPost = createFixtureListing("fixture-noise", {
   sourceMarket: "fruitsfamily",
-  title: "슈프림 박스로고 후드 삽니다 문의주세요",
+  title: "슈프림 박스로고 후드 삽니다 문의 주세요",
   brand: "Supreme",
   model: "Box Logo Hoodie",
   season: "FW23",

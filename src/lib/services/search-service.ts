@@ -1,9 +1,11 @@
 import { DEFAULT_MIN_RELEVANCE } from "@/lib/constants";
 import { getConfiguredProviderMode, resolveProviderMode } from "@/lib/config/provider-mode";
-import { runMarketDataSource } from "@/lib/providers/base";
 import { marketDataSources } from "@/lib/providers";
+import { runMarketDataSource } from "@/lib/providers/base";
 import { stripMockScenarioTokens } from "@/lib/providers/mock/scenario";
+import { getSearchCategoryPreset } from "@/lib/search/presets";
 import {
+  CategoryPresetId,
   ComparableGroup,
   CostSettings,
   DashboardSummary,
@@ -11,6 +13,7 @@ import {
   MarketListing,
   MarketProviderResultSnapshot,
   ProviderMode,
+  SearchQueryPlan,
   SearchResponse,
 } from "@/lib/types/market";
 import {
@@ -25,23 +28,102 @@ import {
   computeListingSimilarity,
   normalizeText,
 } from "@/lib/utils/normalize";
+import { preprocessSearchQuery } from "@/lib/utils/query";
 
 interface SearchServiceOptions {
   mode?: ProviderMode | string | null;
+  preset?: CategoryPresetId | string | null;
   limit?: number;
   minRelevanceScore?: number;
   timeoutMs?: number;
 }
+
+const SEARCH_CACHE_TTL_MS = 30_000;
+const searchResponseCache = new Map<string, { expiresAt: number; value: SearchResponse }>();
 
 function sanitizeSearchTerm(searchTerm: string): string {
   const stripped = stripMockScenarioTokens(searchTerm);
   return stripped || searchTerm.trim();
 }
 
-function buildGroupNormalizedName(
-  bucket: MarketListing[],
-  seed: MarketListing,
+function buildSearchCacheKey(
+  queryPlan: SearchQueryPlan,
+  costs: CostSettings,
+  mode: ProviderMode,
+  limit: number,
+  minRelevanceScore: number,
 ): string {
+  return JSON.stringify({
+    mode,
+    query: queryPlan.compact,
+    presetId: queryPlan.presetId,
+    limit,
+    minRelevanceScore,
+    costs,
+  });
+}
+
+function getCachedSearchResponse(cacheKey: string): SearchResponse | null {
+  const cached = searchResponseCache.get(cacheKey);
+
+  if (!cached) {
+    return null;
+  }
+
+  if (cached.expiresAt <= Date.now()) {
+    searchResponseCache.delete(cacheKey);
+    return null;
+  }
+
+  return cached.value;
+}
+
+function setCachedSearchResponse(cacheKey: string, value: SearchResponse) {
+  searchResponseCache.set(cacheKey, {
+    value,
+    expiresAt: Date.now() + SEARCH_CACHE_TTL_MS,
+  });
+}
+
+function dedupeListings(listings: MarketListing[]): MarketListing[] {
+  const byKey = new Map<string, MarketListing>();
+
+  listings.forEach((listing) => {
+    const key = `${listing.sourceMarket}:${listing.id}:${listing.itemUrl}`;
+    const existing = byKey.get(key);
+
+    if (!existing) {
+      byKey.set(key, listing);
+      return;
+    }
+
+    if (
+      listing.relevanceScore > existing.relevanceScore ||
+      (listing.relevanceScore === existing.relevanceScore &&
+        listing.confidenceScore > existing.confidenceScore)
+    ) {
+      byKey.set(key, listing);
+    }
+  });
+
+  return [...byKey.values()];
+}
+
+function sortListings(listings: MarketListing[]): MarketListing[] {
+  return [...listings].sort((left, right) => {
+    if (right.relevanceScore !== left.relevanceScore) {
+      return right.relevanceScore - left.relevanceScore;
+    }
+
+    if (right.confidenceScore !== left.confidenceScore) {
+      return right.confidenceScore - left.confidenceScore;
+    }
+
+    return (right.soldAt ?? right.listedAt).localeCompare(left.soldAt ?? left.listedAt);
+  });
+}
+
+function buildGroupNormalizedName(bucket: MarketListing[], seed: MarketListing): string {
   const counts = new Map<string, number>();
 
   bucket.forEach((listing) => {
@@ -59,7 +141,12 @@ function buildGroupNormalizedName(
   );
 }
 
-function resolveGroupingThreshold(left: MarketListing, right: MarketListing): number {
+function resolveGroupingThreshold(
+  left: MarketListing,
+  right: MarketListing,
+  presetId: CategoryPresetId,
+): number {
+  const preset = getSearchCategoryPreset(presetId);
   const sameBrand =
     left.brand !== "Unknown" &&
     right.brand !== "Unknown" &&
@@ -70,29 +157,22 @@ function resolveGroupingThreshold(left: MarketListing, right: MarketListing): nu
     normalizeText(left.category) === normalizeText(right.category);
 
   if (sameBrand && sameCategory) {
-    return 0.56;
+    return preset.similarity.sameBrandCategoryThreshold;
   }
 
   if (sameBrand) {
-    return 0.6;
+    return preset.similarity.sameBrandThreshold;
   }
 
-  return 0.64;
+  return preset.similarity.baseThreshold;
 }
 
-function buildComparableGroups(listings: MarketListing[]): ComparableGroup[] {
+function buildComparableGroups(
+  listings: MarketListing[],
+  presetId: CategoryPresetId,
+): ComparableGroup[] {
   const grouped: Array<{ seed: MarketListing; listings: MarketListing[] }> = [];
-  const sortedListings = [...listings].sort((left, right) => {
-    if (right.relevanceScore !== left.relevanceScore) {
-      return right.relevanceScore - left.relevanceScore;
-    }
-
-    if (left.listingType !== right.listingType) {
-      return left.listingType === "sold" ? -1 : 1;
-    }
-
-    return (right.soldAt ?? right.listedAt).localeCompare(left.soldAt ?? left.listedAt);
-  });
+  const sortedListings = sortListings(listings);
 
   sortedListings.forEach((listing) => {
     let bestMatch:
@@ -105,10 +185,10 @@ function buildComparableGroups(listings: MarketListing[]): ComparableGroup[] {
     grouped.forEach((group) => {
       const sampleListings = [group.seed, ...group.listings.slice(0, 2)];
       const score = Math.max(
-        ...sampleListings.map((candidate) => computeListingSimilarity(listing, candidate)),
+        ...sampleListings.map((candidate) => computeListingSimilarity(listing, candidate, presetId)),
       );
       const threshold = Math.min(
-        ...sampleListings.map((candidate) => resolveGroupingThreshold(listing, candidate)),
+        ...sampleListings.map((candidate) => resolveGroupingThreshold(listing, candidate, presetId)),
       );
 
       if (score >= threshold && (!bestMatch || score > bestMatch.score)) {
@@ -145,13 +225,7 @@ function buildComparableGroups(listings: MarketListing[]): ComparableGroup[] {
         listingCount: bucket.length,
         soldCount: bucket.filter((listing) => listing.listingType === "sold").length,
         activeCount: bucket.filter((listing) => listing.listingType === "active").length,
-        listings: bucket.sort((left, right) => {
-          if (right.relevanceScore !== left.relevanceScore) {
-            return right.relevanceScore - left.relevanceScore;
-          }
-
-          return (right.soldAt ?? right.listedAt).localeCompare(left.soldAt ?? left.listedAt);
-        }),
+        listings: sortListings(bucket),
       };
     })
     .sort((left, right) => {
@@ -175,10 +249,30 @@ function buildMarketSnapshots(
 ): MarketProviderResultSnapshot[] {
   return providerResults.map((result) => {
     const status = result.summary.status;
+    const variantCounts = result.normalized.listings.reduce((accumulator, listing) => {
+      const key = listing.queryVariantKey ?? "unknown";
+      accumulator.set(key, (accumulator.get(key) ?? 0) + 1);
+      return accumulator;
+    }, new Map<string, number>());
+    const debug = result.collector.debug
+      ? {
+          ...result.collector.debug,
+          attemptedQueries: result.collector.debug.attemptedQueries.map((attempt) => {
+            const normalizedResultCount = variantCounts.get(attempt.variantKey) ?? 0;
+
+            return {
+              ...attempt,
+              normalizedResultCount,
+              filteredOutCount: Math.max(attempt.rawResultCount - normalizedResultCount, 0),
+            };
+          }),
+        }
+      : undefined;
 
     return {
       ...result.summary,
       fetchedAt: result.collector.fetchedAt,
+      debug,
       isSuccess: status === "success",
       isPartial: status === "partial",
       isEmpty: status === "empty",
@@ -232,7 +326,7 @@ function buildDashboardSummary(
 
 function hasPartialFailures(marketResults: MarketProviderResultSnapshot[]): boolean {
   return marketResults.some((result) =>
-    ["partial", "timeout", "parsing_failure", "error"].includes(result.status),
+    ["partial", "timeout", "parse_error", "parsing_failure", "blocked", "error"].includes(result.status),
   );
 }
 
@@ -240,40 +334,24 @@ function hasAnySuccessfulMarket(marketResults: MarketProviderResultSnapshot[]): 
   return marketResults.some((result) => result.status === "success" || result.status === "partial");
 }
 
-export async function searchResellOpportunities(
+function buildSearchResponse(
   searchTerm: string,
+  queryPlan: SearchQueryPlan,
   costs: CostSettings,
-  options: SearchServiceOptions = {},
-): Promise<SearchResponse> {
-  const providerMode = resolveProviderMode(options.mode ?? getConfiguredProviderMode());
-  const sanitizedSearchTerm = sanitizeSearchTerm(searchTerm.trim());
-
-  const providerResults = await Promise.all(
-    marketDataSources.map((source) =>
-      runMarketDataSource(source, {
-        query: sanitizedSearchTerm,
-        limit: options.limit ?? 24,
-        minRelevanceScore: options.minRelevanceScore ?? DEFAULT_MIN_RELEVANCE,
-        timeoutMs: options.timeoutMs,
-        mode: providerMode,
-      }),
+  providerMode: ProviderMode,
+  providerResults: Awaited<ReturnType<typeof runMarketDataSource>>[],
+  debugCacheHit: boolean,
+  totalDurationMs: number,
+): SearchResponse {
+  const marketResults = buildMarketSnapshots(providerResults);
+  const listings = sortListings(
+    dedupeListings(
+      enrichListingsWithKrw(
+        providerResults.flatMap((result) => result.normalized.listings),
+        costs,
+      ),
     ),
   );
-
-  const marketResults = buildMarketSnapshots(providerResults);
-  const listings = enrichListingsWithKrw(
-    providerResults
-      .flatMap((result) => result.normalized.listings)
-      .sort((left, right) => {
-        if (right.relevanceScore !== left.relevanceScore) {
-          return right.relevanceScore - left.relevanceScore;
-        }
-
-        return (right.soldAt ?? right.listedAt).localeCompare(left.soldAt ?? left.listedAt);
-      }),
-    costs,
-  );
-
   const marketAnalyses = marketDataSources.map((source) =>
     calculateMarketAnalysis(
       source.id,
@@ -281,14 +359,15 @@ export async function searchResellOpportunities(
     ),
   );
   const profitProjection = calculateProfitProjection(marketAnalyses, costs);
-  const groups = buildComparableGroups(listings);
+  const groups = buildComparableGroups(listings, queryPlan.presetId);
   const recommendation = calculateRecommendation(
     listings,
     marketAnalyses,
     profitProjection,
     groups,
+    queryPlan.presetId,
   );
-  const recommendedListings = pickRecommendedListings(listings, profitProjection);
+  const recommendedListings = pickRecommendedListings(listings, profitProjection, queryPlan.presetId);
   const dashboard = buildDashboardSummary(
     marketAnalyses,
     recommendation.recommendationScore,
@@ -297,10 +376,12 @@ export async function searchResellOpportunities(
   );
 
   return {
-    searchTerm: sanitizedSearchTerm,
+    searchTerm,
     generatedAt: new Date().toISOString(),
     costs,
     providerMode,
+    queryPlan,
+    alternativeQueries: queryPlan.alternativeSuggestions,
     marketResults,
     hasPartialFailures: hasPartialFailures(marketResults),
     hasAnySuccessfulMarket: hasAnySuccessfulMarket(marketResults),
@@ -311,5 +392,76 @@ export async function searchResellOpportunities(
     profitProjection,
     recommendation,
     dashboard,
+    debug: {
+      cacheHit: debugCacheHit,
+      totalDurationMs,
+      queryPlan,
+      providerDebug: marketResults.flatMap((result) => (result.debug ? [result.debug] : [])),
+    },
   };
+}
+
+export async function searchResellOpportunities(
+  searchTerm: string,
+  costs: CostSettings,
+  options: SearchServiceOptions = {},
+): Promise<SearchResponse> {
+  const startedAt = Date.now();
+  const providerMode = resolveProviderMode(options.mode ?? getConfiguredProviderMode());
+  const sanitizedSearchTerm = sanitizeSearchTerm(searchTerm.trim());
+  const queryPlan = preprocessSearchQuery(sanitizedSearchTerm, {
+    presetId: options.preset,
+  });
+  const limit = options.limit ?? 24;
+  const preset = getSearchCategoryPreset(queryPlan.presetId);
+  const minRelevanceScore =
+    options.minRelevanceScore ?? Math.max(DEFAULT_MIN_RELEVANCE, preset.id === "camera" ? 0.38 : preset.id === "vintage_furniture" ? 0.35 : DEFAULT_MIN_RELEVANCE);
+  const cacheKey = buildSearchCacheKey(
+    queryPlan,
+    costs,
+    providerMode,
+    limit,
+    minRelevanceScore,
+  );
+  const cachedResponse = getCachedSearchResponse(cacheKey);
+
+  if (cachedResponse) {
+    return {
+      ...cachedResponse,
+      generatedAt: new Date().toISOString(),
+      debug: cachedResponse.debug
+        ? {
+            ...cachedResponse.debug,
+            cacheHit: true,
+            totalDurationMs: Date.now() - startedAt,
+          }
+        : cachedResponse.debug,
+    };
+  }
+
+  const providerResults = await Promise.all(
+    marketDataSources.map((source) =>
+      runMarketDataSource(source, {
+        query: queryPlan.normalized || sanitizedSearchTerm,
+        queryPlan,
+        limit,
+        minRelevanceScore,
+        timeoutMs: options.timeoutMs,
+        mode: providerMode,
+      }),
+    ),
+  );
+
+  const response = buildSearchResponse(
+    sanitizedSearchTerm,
+    queryPlan,
+    costs,
+    providerMode,
+    providerResults,
+    false,
+    Date.now() - startedAt,
+  );
+
+  setCachedSearchResponse(cacheKey, response);
+  return response;
 }

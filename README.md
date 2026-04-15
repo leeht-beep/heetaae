@@ -1,231 +1,272 @@
 # Market Resell Web MVP
 
-Next.js + TypeScript + Tailwind CSS 기반의 반응형 웹 MVP입니다.
+Mercari Japan, 번개장터, FruitsFamily를 동시에 검색해서 일본 매입가 대비 한국 재판매 가능성을 빠르게 판단하는 Next.js 기반 반응형 웹 MVP입니다.
 
-현재 상태:
+현재 프로젝트는 UI 자체보다 검색 파이프라인 품질에 초점을 맞추고 있습니다. 각 마켓은 `collector -> parser -> normalizer -> ranking -> aggregation` 흐름으로 분리되어 있고, `mock` / `real` 모드를 동일한 contract 위에서 교체할 수 있습니다.
 
-- `mercari`: 실제 수집 provider 연결 완료
-- `bunjang`: 실제 수집 provider 연결 완료
-- `fruitsfamily`: 실제 수집 provider 연결 완료
-
-기존 UI와 `search-service` 흐름은 유지한 채, 마켓별 provider를 실제 수집기로 단계적으로 교체할 수 있는 구조로 정리되어 있습니다.
-
-## 실행
+## Run
 
 ```bash
 npm install
 npm run dev
 ```
 
-브라우저에서 [http://localhost:3000](http://localhost:3000) 으로 접속하면 됩니다.
+브라우저에서 [http://localhost:3000](http://localhost:3000) 으로 접속합니다.
 
-## 검증
+## Verify
 
 ```bash
 npm run typecheck
 npm run build
 ```
 
-## 현재 구현 범위
+## Current Scope
 
 - 3개 마켓 통합 검색 UI
 - 추천 / 전체 / 판매중 / 판매완료 / 마켓별 탭
 - 요약 카드, 평균가 비교, 거래량 추정, 추천 매입가 계산
-- 추천 점수와 상세 모달
-- provider별 상태 표시
-- Mercari / Bunjang 실제 검색 결과 수집
+- 추천 점수, 상세 모달, 유사 상품 그룹 비교
+- provider별 상태 / confidence / debug 정보
+- Mercari / 번개장터 / FruitsFamily 실제 수집 provider 연결
+- 개발 모드용 Search Debug 패널
+- benchmark runner / alias dictionary / regression guard
+- category preset 기반 검색 튜닝
 
-## Provider 모드
+## Search Pipeline
 
-`src/lib/config/provider-mode.ts`
+검색 파이프라인은 아래 단계로 분리되어 있습니다.
 
-- 기본 모드: `real`
-- 지원 모드: `mock`, `real`
-- API에서 `mode=mock` 또는 `mode=real` 쿼리 파라미터로 전환 가능
-- 환경변수 `MARKET_PROVIDER_MODE=mock` 으로 전체 mock 모드로 되돌릴 수 있음
+1. query preprocessing
+2. provider fetch
+3. parser
+4. normalization
+5. ranking / filtering
+6. aggregation / recommendation
 
-현재 `real` 모드에서는:
+핵심 파일:
 
-- `mercari`: real collector
-- `bunjang`: real collector
-- `fruitsfamily`: real collector
+- `src/lib/utils/query.ts`
+- `src/lib/utils/normalize.ts`
+- `src/lib/normalizers/shared.ts`
+- `src/lib/services/search-service.ts`
+- `src/lib/utils/calculations.ts`
 
-## 아키텍처 핵심
+## Category Presets
 
-`src/lib/providers/base.ts`
+검색 품질을 상품군별로 튜닝하기 위해 preset 구조를 지원합니다.
 
-- `RawMarketCollector`: raw collector response 반환
-- `MarketNormalizer`: raw item을 공통 `MarketListing`으로 정규화
-- `MarketDataSource`: collector + normalizer 조합
-- `runMarketDataSource`: timeout, error, normalization, summary를 공통 처리
+- `fashion`
+- `camera`
+- `vintage_furniture`
 
-`src/lib/types/market.ts`
+Preset 정의 파일:
 
-- `RawCollectorEnvelope`
-- `NormalizationEnvelope`
-- `MarketCollectionSummary`
-- `MarketProviderResultSnapshot`
+- `src/lib/search/presets.ts`
 
-## 폴더 구조
+Preset이 제어하는 항목:
 
-```text
-src/
-  app/
-    api/search/route.ts
-    page.tsx
-  components/
-  lib/
-    config/
-      provider-mode.ts
-    fixtures/
-      bunjang/search-results.ts
-      fruitsfamily/search-results.ts
-      mercari/search-results.ts
-      index.ts
-      types.ts
-    normalizers/
-      bunjangNormalizer.ts
-      fruitsfamilyNormalizer.ts
-      mercariNormalizer.ts
-      shared.ts
-    providers/
-      bunjang/
-        collector.ts
-        config.ts
-        fixtures.ts
-        parser.fixture-example.ts
-        parser.ts
-      fruitsfamily/
-        collector.ts
-        config.ts
-        fixtures.ts
-        parser.fixture-example.ts
-        parser.ts
-      mercari/
-        collector.ts
-        config.ts
-        fixtures.ts
-        parser.fixture-example.ts
-        parser.ts
-      mock/
-        fixtureCollector.ts
-        scenario.ts
-      real/
-        notConfiguredCollector.ts
-      base.ts
-      bunjangProvider.ts
-      fruitsfamilyProvider.ts
-      mercariProvider.ts
-      index.ts
-    services/
-      search-service.ts
-    types/
-      market.ts
-    utils/
-      calculations.ts
-      format.ts
-      normalize.ts
-```
+- noise keywords
+- preferred aliases
+- relevance weights
+- similarity thresholds
+- preferred query variant strategies
+- category-specific normalization rules
+- recommendation score thresholds
 
-## Mercari 실제 수집기
-
-관련 파일:
-
-- `src/lib/providers/mercari/collector.ts`
-- `src/lib/providers/mercari/parser.ts`
-- `src/lib/providers/mercari/fixtures.ts`
-- `src/lib/providers/mercari/parser.fixture-example.ts`
-- `src/lib/normalizers/mercariNormalizer.ts`
-
-동작 방식:
-
-1. 검색 URL 생성
-2. headless Chrome/Edge 렌더 DOM 우선 수집
-3. item grid 파싱
-4. 필요 시 HTTP HTML fallback
-5. `on_sale` / `sold_out` 결과 병합 후 normalizer 전달
-
-주의:
-
-- Mercari real collector는 로컬 Chrome 또는 Edge 실행 파일이 필요함
-- 필요하면 `MERCARI_CHROME_PATH` 또는 `CHROME_PATH` 환경변수로 경로 지정 가능
-- Mercari Shops 항목은 제외
-
-## Bunjang 실제 수집기
-
-관련 파일:
-
-- `src/lib/providers/bunjang/collector.ts`
-- `src/lib/providers/bunjang/parser.ts`
-- `src/lib/providers/bunjang/fixtures.ts`
-- `src/lib/providers/bunjang/parser.fixture-example.ts`
-- `src/lib/normalizers/bunjangNormalizer.ts`
-
-동작 방식:
-
-1. 번개장터 검색 API `find_v2.json` 호출
-2. parser에서 광고 / 비상품 항목 제거
-3. product entry를 `BunjangRawListing`으로 변환
-4. normalizer에서 브랜드/모델/카테고리/사이즈를 보강
-5. 공통 `MarketListing`으로 정규화
-
-메모:
-
-- 현재는 검색 API 기준으로 active 상품 중심 수집
-- 응답에 판매 상태 값이 내려오면 `saleStatus`에 반영
-- `listedAt`은 검색 응답의 `update_time` 기준으로 최대한 채움
-- 상품 이미지 URL 템플릿의 `{res}`는 실제 썸네일 해상도로 치환
-
-## FruitsFamily 실제 수집기
-
-관련 파일:
-
-- `src/lib/providers/fruitsfamily/collector.ts`
-- `src/lib/providers/fruitsfamily/parser.ts`
-- `src/lib/providers/fruitsfamily/fixtures.ts`
-- `src/lib/providers/fruitsfamily/parser.fixture-example.ts`
-- `src/lib/normalizers/fruitsfamilyNormalizer.ts`
-
-동작 방식:
-
-1. FruitsFamily 검색 페이지 HTML 요청
-2. SSR HTML 안의 `__APOLLO_STATE__` JSON 추출
-3. `ROOT_QUERY.searchProducts(...)` 참조 목록을 따라 검색 결과 제품만 파싱
-4. HTML 안의 실제 상품 링크를 함께 읽어 item URL 복원
-5. normalizer에서 패션형 title normalization, 브랜드/모델/카테고리 추론 보강
-
-메모:
-
-- 현재 검색 페이지 기준으로 active 상품이 주력이지만, Apollo state의 `status`가 판매완료 상태를 포함하면 `listingType`에 반영
-- `itemUrl`은 실제 검색 결과 HTML의 상품 경로를 우선 사용하고, 필요 시 id 기반으로 fallback 생성
-- `listedAt`, `price`, `imageUrl`, `brand`, `size`, `category`를 최대한 채우도록 구성
-
-## 에러 처리 정책
-
-마켓별 상태를 독립적으로 관리합니다.
-
-- `success`
-- `empty`
-- `partial`
-- `timeout`
-- `parsing_failure`
-- `error`
-
-한 마켓이 실패해도 다른 마켓 결과는 계속 반환되며, UI는 `marketResults`를 통해 상태를 표시합니다.
-
-## Mock 시나리오
-
-mock provider에서 아래 토큰을 검색어에 붙이면 예외 상황을 테스트할 수 있습니다.
-
-- `[timeout:mercari]`
-- `[error:bunjang]`
-- `[partial:fruitsfamily]`
-- `[parsefail:all]`
+기본값은 `auto` 감지이며, 검색어/alias를 바탕으로 자동 선택됩니다. 필요하면 UI에서 수동으로 선택하거나 API에서 직접 지정할 수 있습니다.
 
 예시:
 
-```text
-Supreme Box Logo Hoodie [partial:mercari]
+```bash
+GET /api/search?q=Leica%20M6&preset=camera
+GET /api/search?q=Herman%20Miller%20Aeron&preset=vintage_furniture
+GET /api/search?q=Supreme%20Box%20Logo%20Hoodie&preset=fashion
 ```
 
-실제 검색에는 토큰이 제거된 검색어가 사용됩니다.
+## Alias Dictionary
+
+한글 / 영문 / 일문 혼합 검색을 위해 alias 사전을 별도로 관리합니다.
+
+사전 파일:
+
+- `src/lib/search/alias-dictionary.ts`
+
+이 사전은 query preprocessing, localized query variants, preset detection, benchmark 튜닝에 함께 사용됩니다.
+
+## Provider Architecture
+
+공통 계약:
+
+- `RawMarketCollector`: 마켓 원본 응답 수집
+- `MarketNormalizer`: 원본 응답을 공통 listing 구조로 변환
+- `MarketDataSource`: collector + normalizer 조합
+- `runMarketDataSource`: timeout, error, normalization, summary 공통 처리
+
+핵심 파일:
+
+- `src/lib/providers/base.ts`
+- `src/lib/types/market.ts`
+
+실제 provider 구현:
+
+- `src/lib/providers/mercariProvider.ts`
+- `src/lib/providers/bunjangProvider.ts`
+- `src/lib/providers/fruitsfamilyProvider.ts`
+
+세부 collector / parser:
+
+- `src/lib/providers/mercari/collector.ts`
+- `src/lib/providers/mercari/parser.ts`
+- `src/lib/providers/bunjang/collector.ts`
+- `src/lib/providers/bunjang/parser.ts`
+- `src/lib/providers/fruitsfamily/collector.ts`
+- `src/lib/providers/fruitsfamily/parser.ts`
+
+## Search Debug
+
+개발 모드에서는 Search Debug 패널이 열립니다.
+
+표시 정보:
+
+- normalized query
+- applied preset / preset source
+- cache hit / miss
+- 전체 소요 시간
+- alias matches
+- planned query variants
+- provider별 attempted queries
+- raw / normalized / filtered count
+- fallback 사용 여부
+
+## Benchmark Runner
+
+실전 검색어 세트로 provider별 품질을 비교하려면 benchmark runner를 사용합니다.
+
+```bash
+npm run dev
+```
+
+다른 터미널에서:
+
+```bash
+npm run benchmark
+```
+
+자주 쓰는 예시:
+
+```bash
+npm run benchmark -- --tags=core
+npm run benchmark -- --tags=core,fashion --maxQueries=8
+npm run benchmark -- --ids=supreme-box-logo-ko,auralee-super-light-ja
+npm run benchmark -- --preset=camera --ids=leica-m6-en
+npm run benchmark -- --comparePresets=true --tags=core
+npm run benchmark:assert -- --tags=core
+```
+
+benchmark route:
+
+- `GET /api/benchmark`
+- 주요 파라미터: `mode`, `tags`, `ids`, `maxQueries`, `delayMs`, `limit`, `preset`, `comparePresets`
+
+## Preset Benchmarking
+
+benchmark runner는 같은 검색어를 `auto`, `fashion`, `camera`, `vintage_furniture`로 각각 실행해서 비교할 수 있습니다.
+
+예시:
+
+```bash
+npm run benchmark -- --tags=core --comparePresets=true
+npm run benchmark -- --preset=camera --ids=leica-m6-en --comparePresets=true
+npm run benchmark -- --preset=vintage_furniture --ids=herman-miller-aeron-ko --comparePresets=true
+```
+
+API 예시:
+
+```bash
+GET /api/benchmark?tags=core&comparePresets=1
+GET /api/benchmark?ids=leica-m6-en&preset=camera&comparePresets=1
+```
+
+benchmark report에는 아래 정보가 포함됩니다.
+
+- provider별 status / raw / normalized / filtered count
+- top relevance / top confidence
+- fallback 사용 여부
+- best variant / variant leaderboard
+- applied preset / preset source
+- per-query preset comparison summary
+- best preset
+- tuning priorities
+- regression warnings
+
+## Benchmark Dataset
+
+대표 검색어 세트는 아래 파일에서 관리합니다.
+
+- `src/lib/benchmarks/dataset.ts`
+
+일부 쿼리는 `recommendedPreset` 메타데이터를 가질 수 있습니다. 이 값은 아래 용도로 유용합니다.
+
+- auto preset이 기대한 카테고리를 잘 골랐는지 확인
+- 수동 preset이 auto보다 더 나은지 비교
+- alias / scoring 수정 후 회귀 감지
+
+## Regression Guard
+
+benchmark runner는 단순 출력만 하는 것이 아니라 baseline과 비교해서 품질 하락을 감지합니다.
+
+baseline 파일:
+
+- `src/lib/benchmarks/baseline.ts`
+
+현재 baseline은 아래 항목을 봅니다.
+
+- provider별 useful rate
+- provider별 average top relevance
+- provider별 average top confidence
+- provider별 blocked rate
+- 핵심 검색어에서 최소 몇 개 provider가 결과를 내야 하는지
+
+```bash
+npm run benchmark:assert -- --tags=core
+```
+
+심한 regression이 감지되면 종료 코드 `1`로 실패합니다.
+
+## Fixtures
+
+collector / parser 개발용 fixture:
+
+- `src/lib/providers/mercari/fixtures.ts`
+- `src/lib/providers/mercari/parser.fixture-example.ts`
+- `src/lib/providers/bunjang/fixtures.ts`
+- `src/lib/providers/bunjang/parser.fixture-example.ts`
+- `src/lib/providers/fruitsfamily/fixtures.ts`
+- `src/lib/providers/fruitsfamily/parser.fixture-example.ts`
+
+정규화 예시:
+
+- `src/lib/utils/normalize.fixture-example.ts`
+
+## Provider Mode
+
+설정 파일:
+
+- `src/lib/config/provider-mode.ts`
+
+지원 모드:
+
+- `real`
+- `mock`
+
+전환 방식:
+
+- 기본값은 `real`
+- API에서 `mode=mock` 또는 `mode=real`
+- 환경변수 `MARKET_PROVIDER_MODE=mock`
+
+## Notes
+
+- 실제 마켓 구조가 바뀌면 parser / collector 조정이 필요할 수 있습니다.
+- 개발 모드의 Search Debug와 benchmark preset comparison을 같이 보면 어느 단계에서 품질이 떨어지는지 빠르게 찾을 수 있습니다.
+- 외부 이미지 호스트는 `next.config.ts`에 등록되어 있습니다.

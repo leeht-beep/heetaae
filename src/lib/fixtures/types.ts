@@ -16,8 +16,12 @@ export interface MercariRawListing {
   postedAt?: string;
   purchasedAt?: string;
   status?: "on_sale" | "sold_out";
-   itemType?: "ITEM_TYPE_MERCARI" | "ITEM_TYPE_BEYOND" | string;
-   parserSource?: "http" | "rendered_dom" | "fixture";
+  itemType?: "ITEM_TYPE_MERCARI" | "ITEM_TYPE_BEYOND" | string;
+  parserSource?: "http" | "rendered_dom" | "fixture";
+  matchedQuery?: string;
+  queryVariantKey?: string;
+  queryVariantLabel?: string;
+  rawConfidence?: number;
   attributes?: {
     size?: string;
     brand?: string;
@@ -38,6 +42,10 @@ export interface BunjangRawListing {
   closedAt?: string;
   saleStatus?: "SALE" | "SOLD_OUT";
   parserSource?: "api" | "fixture";
+  matchedQuery?: string;
+  queryVariantKey?: string;
+  queryVariantLabel?: string;
+  rawConfidence?: number;
   categoryId?: string;
   locationName?: string;
   spec?: {
@@ -61,6 +69,10 @@ export interface FruitsfamilyRawListing {
   soldOutAt?: string;
   isSold?: boolean;
   parserSource?: "apollo_state" | "fixture";
+  matchedQuery?: string;
+  queryVariantKey?: string;
+  queryVariantLabel?: string;
+  rawConfidence?: number;
   descriptionText?: string;
   conditionLabel?: string;
   statusLabel?: string;

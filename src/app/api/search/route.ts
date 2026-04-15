@@ -16,6 +16,7 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const searchTerm = searchParams.get("q")?.trim() || DEFAULT_SEARCH_TERM;
   const mode = resolveProviderMode(searchParams.get("mode"));
+  const preset = searchParams.get("preset")?.trim() || undefined;
   const costs = {
     exchangeRate: parseNumber(searchParams.get("exchangeRate"), DEFAULT_COST_SETTINGS.exchangeRate),
     japanDomesticShipping: parseNumber(
@@ -31,6 +32,6 @@ export async function GET(request: NextRequest) {
     targetMarginRate: parseNumber(searchParams.get("targetMarginRate"), DEFAULT_COST_SETTINGS.targetMarginRate),
   };
 
-  const payload = await searchResellOpportunities(searchTerm, costs, { mode });
+  const payload = await searchResellOpportunities(searchTerm, costs, { mode, preset });
   return NextResponse.json(payload);
 }

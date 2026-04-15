@@ -46,7 +46,7 @@ export function listingStatusLabel(type: ListingType): string {
 }
 
 export function providerModeLabel(mode: ProviderMode): string {
-  return mode === "mock" ? "Mock 데이터" : "실수집기";
+  return mode === "mock" ? "Mock 데이터" : "실수집";
 }
 
 export function providerStatusLabel(status: ProviderExecutionStatus): string {
@@ -59,6 +59,9 @@ export function providerStatusLabel(status: ProviderExecutionStatus): string {
       return "부분 성공";
     case "timeout":
       return "타임아웃";
+    case "blocked":
+      return "차단";
+    case "parse_error":
     case "parsing_failure":
       return "파싱 실패";
     case "error":

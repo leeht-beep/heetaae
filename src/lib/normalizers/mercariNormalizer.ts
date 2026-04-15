@@ -155,6 +155,7 @@ export const mercariNormalizer: MarketNormalizer<MercariRawListing> = {
       market: context.market,
       label: context.label,
       query: context.query,
+      queryPlan: context.queryPlan,
       rawItems: context.rawItems,
       minRelevanceScore: context.minRelevanceScore,
       mapRawItem: (rawItem) => {
@@ -181,6 +182,9 @@ export const mercariNormalizer: MarketNormalizer<MercariRawListing> = {
           season,
           category,
           relatedKeywords: buildMercariKeywords(title, rawItem.attributes?.keywords),
+          collectedQuery: rawItem.matchedQuery,
+          queryVariantKey: rawItem.queryVariantKey,
+          rawConfidence: rawItem.rawConfidence,
         };
       },
     });

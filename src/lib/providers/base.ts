@@ -6,12 +6,15 @@ import {
   ProviderExecutionStatus,
   ProviderMode,
   RawCollectorEnvelope,
+  SearchQueryPlan,
 } from "@/lib/types/market";
+import { preprocessSearchQuery } from "@/lib/utils/query";
 
 export const DEFAULT_PROVIDER_TIMEOUT_MS = 8000;
 
 export interface SearchProviderContext {
   query: string;
+  queryPlan?: SearchQueryPlan;
   limit?: number;
   minRelevanceScore?: number;
   timeoutMs?: number;
@@ -20,6 +23,7 @@ export interface SearchProviderContext {
 
 export interface ResolvedSearchProviderContext {
   query: string;
+  queryPlan: SearchQueryPlan;
   limit: number;
   minRelevanceScore: number;
   timeoutMs: number;
@@ -28,6 +32,7 @@ export interface ResolvedSearchProviderContext {
 
 export interface ProviderNormalizationContext<TRawItem> {
   query: string;
+  queryPlan: SearchQueryPlan;
   market: MarketId;
   label: string;
   rawItems: TRawItem[];
@@ -90,9 +95,11 @@ export function buildCollectorEnvelope<
   rawItems?: TRawItem[];
   meta?: TMeta;
   warnings?: string[];
+  confidenceScore?: number;
   error?: ProviderErrorInfo;
   durationMs: number;
   fetchedAt?: string;
+  debug?: RawCollectorEnvelope<TRawItem, TMeta>["debug"];
 }): RawCollectorEnvelope<TRawItem, TMeta> {
   return {
     market: options.market,
@@ -105,6 +112,8 @@ export function buildCollectorEnvelope<
     rawItems: options.rawItems ?? [],
     meta: (options.meta ?? {}) as TMeta,
     warnings: options.warnings ?? [],
+    confidenceScore: options.confidenceScore,
+    debug: options.debug,
     error: options.error,
   };
 }
@@ -114,6 +123,7 @@ export function resolveSearchProviderContext(
 ): ResolvedSearchProviderContext {
   return {
     query: context.query,
+    queryPlan: context.queryPlan ?? preprocessSearchQuery(context.query),
     limit: context.limit ?? 24,
     minRelevanceScore: context.minRelevanceScore ?? 0.34,
     timeoutMs: context.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS,
@@ -149,7 +159,7 @@ function resolveSummaryStatus(
   collectorStatus: ProviderExecutionStatus,
   normalized: NormalizationEnvelope,
 ): ProviderExecutionStatus {
-  if (collectorStatus === "timeout" || collectorStatus === "error") {
+  if (collectorStatus === "timeout" || collectorStatus === "blocked" || collectorStatus === "error") {
     return normalized.listings.length > 0 ? "partial" : collectorStatus;
   }
 
@@ -157,8 +167,12 @@ function resolveSummaryStatus(
     return normalized.listings.length > 0 ? "partial" : normalized.status;
   }
 
-  if (normalized.status === "parsing_failure" || normalized.status === "partial") {
-    return normalized.status;
+  if (
+    normalized.status === "parse_error" ||
+    normalized.status === "parsing_failure" ||
+    normalized.status === "partial"
+  ) {
+    return normalized.status === "parsing_failure" ? "parse_error" : normalized.status;
   }
 
   if (normalized.listings.length === 0) {
@@ -186,7 +200,12 @@ function buildCollectionSummary<
     activeListingCount: normalized.stats.activeCount,
     soldListingCount: normalized.stats.soldCount,
     durationMs: collector.durationMs,
+    confidenceScore:
+      normalized.confidenceScore > 0
+        ? normalized.confidenceScore
+        : collector.confidenceScore ?? 0,
     warnings: [...collector.warnings, ...normalized.warnings],
+    debug: collector.debug,
     error: normalized.error ?? collector.error,
   };
 }
@@ -199,18 +218,19 @@ function buildCollectorFailureEnvelope<
   context: ResolvedSearchProviderContext,
   error: unknown,
 ): RawCollectorEnvelope<TRawItem, TMeta> {
-  const providerError = isTimeoutError(error)
-    ? createProviderError({
-        type: "timeout",
-        message: `${source.label} 수집이 제한 시간 안에 완료되지 않았습니다.`,
-        retryable: true,
-      })
-    : createProviderError({
-        type: "unknown",
-        message: `${source.label} 수집 중 오류가 발생했습니다.`,
-        retryable: true,
-        details: error instanceof Error ? error.message : String(error),
-      });
+  const providerError =
+    isTimeoutError(error)
+      ? createProviderError({
+          type: "timeout",
+          message: `${source.label} collection timed out.`,
+          retryable: true,
+        })
+      : createProviderError({
+          type: "unknown",
+          message: `${source.label} collection failed.`,
+          retryable: true,
+          details: error instanceof Error ? error.message : String(error),
+        });
 
   return buildCollectorEnvelope<TRawItem, TMeta>({
     market: source.id,
@@ -222,6 +242,7 @@ function buildCollectorFailureEnvelope<
     meta: {} as TMeta,
     warnings: [],
     error: providerError,
+    confidenceScore: 0,
     durationMs: context.timeoutMs,
   });
 }
@@ -250,13 +271,14 @@ export async function runMarketDataSource<
         label: source.label,
         mode: resolvedContext.mode,
         query: resolvedContext.query,
-        status: "error",
+        status: "blocked",
         rawItems: [],
         meta: {} as TMeta,
         warnings: [],
+        confidenceScore: 0,
         error: createProviderError({
           type: "not_configured",
-          message: `${source.label} ${resolvedContext.mode} collector가 구성되지 않았습니다.`,
+          message: `${source.label} ${resolvedContext.mode} collector is not configured.`,
           retryable: false,
         }),
         durationMs: 0,
@@ -264,6 +286,7 @@ export async function runMarketDataSource<
 
   const normalized = await source.normalizer.normalize({
     query: rawEnvelope.query,
+    queryPlan: resolvedContext.queryPlan,
     market: source.id,
     label: source.label,
     rawItems: rawEnvelope.rawItems,

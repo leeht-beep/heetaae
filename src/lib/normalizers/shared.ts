@@ -6,6 +6,7 @@ import {
   NormalizationEnvelope,
   ProviderErrorInfo,
   ProviderExecutionStatus,
+  SearchQueryPlan,
 } from "@/lib/types/market";
 import {
   buildNormalizedName,
@@ -33,12 +34,16 @@ export interface NormalizedListingDraft {
   season?: string;
   category?: string;
   relatedKeywords?: string[];
+  collectedQuery?: string;
+  queryVariantKey?: string;
+  rawConfidence?: number;
 }
 
 interface NormalizeRawItemsOptions<TRawItem> {
   market: MarketId;
   label: string;
   query: string;
+  queryPlan: SearchQueryPlan;
   rawItems: TRawItem[];
   minRelevanceScore: number;
   mapRawItem: (rawItem: TRawItem, index: number) => NormalizedListingDraft;
@@ -64,6 +69,27 @@ function safeDate(value: string | null | undefined): string | undefined {
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
+function isValidHttpUrl(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function resolveImageUrl(value: string | undefined, market: MarketId): string {
+  if (isValidHttpUrl(value)) {
+    return value as string;
+  }
+
+  return `https://picsum.photos/seed/${market}-placeholder/480/480`;
+}
+
 function resolveListingType(
   value: ListingType | undefined,
   soldAt?: string,
@@ -75,10 +101,7 @@ function resolveListingType(
   return soldAt ? "sold" : "active";
 }
 
-function resolveRequiredString(
-  value: string | undefined,
-  fallback: string,
-): string {
+function resolveRequiredString(value: string | undefined, fallback: string): string {
   return safeString(value) ?? fallback;
 }
 
@@ -96,9 +119,38 @@ function inferFallbackBrand(title: string): string | undefined {
   return tokens[0];
 }
 
+function calculateFieldCompleteness(listing: MarketListing): number {
+  const checks = [
+    Boolean(listing.title),
+    Boolean(listing.price),
+    Boolean(listing.currency),
+    isValidHttpUrl(listing.imageUrl),
+    isValidHttpUrl(listing.itemUrl),
+    Boolean(listing.listedAt),
+    listing.brand !== "Unknown",
+    listing.model !== "Unknown",
+    listing.category !== "uncategorized",
+  ];
+
+  return checks.filter(Boolean).length / checks.length;
+}
+
+function calculateListingConfidence(listing: MarketListing, rawConfidence?: number): number {
+  const completeness = calculateFieldCompleteness(listing);
+  const dateBonus = listing.dateConfidence === "observed" ? 1 : 0.55;
+  const base =
+    completeness * 0.42 +
+    listing.relevanceScore * 0.38 +
+    dateBonus * 0.12 +
+    Math.min((listing.relatedKeywords.length || 0) / 6, 1) * 0.04 +
+    (rawConfidence ?? 0.72) * 0.04;
+
+  return Number(Math.min(1, Math.max(0, base)).toFixed(3));
+}
+
 function finalizeListing(
   market: MarketId,
-  query: string,
+  queryPlan: SearchQueryPlan,
   draft: NormalizedListingDraft,
   index: number,
 ): MarketListing | null {
@@ -106,12 +158,13 @@ function finalizeListing(
   const price = typeof draft.price === "number" && Number.isFinite(draft.price) ? draft.price : null;
   const currency = draft.currency;
   const itemUrl = safeString(draft.itemUrl);
+  const imageUrl = safeString(draft.imageUrl);
 
-  if (!title || !price || !currency || !itemUrl) {
+  if (!title || !price || !currency || !itemUrl || !isValidHttpUrl(itemUrl)) {
     return null;
   }
 
-  if (containsNoiseTerm(title)) {
+  if (containsNoiseTerm(title, queryPlan.presetId)) {
     return null;
   }
 
@@ -127,7 +180,7 @@ function finalizeListing(
     category: draft.category,
     size: draft.size,
     relatedKeywords,
-  });
+  }, queryPlan.presetId);
   const brand = resolveRequiredString(
     safeString(draft.brand) ?? inferFallbackBrand(title),
     "Unknown",
@@ -158,7 +211,7 @@ function finalizeListing(
     season,
     category,
     size,
-  });
+  }, queryPlan.presetId);
   const mergedKeywords = Array.from(
     new Set(
       [
@@ -170,20 +223,20 @@ function finalizeListing(
           season,
           category,
           size,
-        }),
+        }, queryPlan.presetId),
       ].filter(Boolean),
     ),
   );
 
   const listing: MarketListing = {
     id: safeString(draft.id) ?? `${market}-${index + 1}`,
-    searchTerm: query,
+    searchTerm: queryPlan.normalized || queryPlan.original,
     sourceMarket: market,
     listingType: resolveListingType(draft.listingType, soldAt),
     title,
     price,
     currency,
-    imageUrl: safeString(draft.imageUrl) ?? "",
+    imageUrl: resolveImageUrl(imageUrl, market),
     itemUrl,
     listedAt,
     soldAt,
@@ -193,12 +246,17 @@ function finalizeListing(
     season,
     category,
     relevanceScore: 0,
+    confidenceScore: 0,
     normalizedName,
     relatedKeywords: mergedKeywords,
     dateConfidence: observedListedAt || soldAt ? "observed" : "fallback",
+    collectedQuery: draft.collectedQuery,
+    queryVariantKey: draft.queryVariantKey,
   };
 
-  listing.relevanceScore = computeRelevanceScore(query, listing);
+  listing.fieldCompleteness = calculateFieldCompleteness(listing);
+  listing.relevanceScore = computeRelevanceScore(queryPlan.normalized || queryPlan.original, listing, queryPlan.presetId);
+  listing.confidenceScore = calculateListingConfidence(listing, draft.rawConfidence);
 
   return listing;
 }
@@ -213,7 +271,7 @@ function buildNormalizationStatus(
   }
 
   if (normalizedCount === 0) {
-    return warnings.length > 0 ? "parsing_failure" : "empty";
+    return warnings.length > 0 ? "parse_error" : "empty";
   }
 
   if (warnings.length > 0) {
@@ -227,10 +285,10 @@ function buildNormalizationError(
   status: ProviderExecutionStatus,
   warnings: string[],
 ): ProviderErrorInfo | undefined {
-  if (status === "parsing_failure") {
+  if (status === "parse_error" || status === "parsing_failure") {
     return {
-      type: "parsing_failure",
-      message: "수집 결과를 공통 listing 형식으로 변환하지 못했습니다.",
+      type: "parse_error",
+      message: "Collected rows could not be normalized into comparable listings.",
       retryable: false,
       details: warnings[0],
     };
@@ -239,7 +297,7 @@ function buildNormalizationError(
   if (status === "partial") {
     return {
       type: "partial_result",
-      message: "일부 항목만 정상적으로 정규화되었습니다.",
+      message: "Some collected rows were dropped during normalization.",
       retryable: true,
       details: warnings[0],
     };
@@ -253,33 +311,42 @@ export function normalizeRawItems<TRawItem>(
 ): NormalizationEnvelope {
   const warnings: string[] = [];
   const listings: MarketListing[] = [];
+  let filteredOutCount = 0;
+  let invalidCount = 0;
 
   options.rawItems.forEach((rawItem, index) => {
     try {
       const listing = finalizeListing(
         options.market,
-        options.query,
+        options.queryPlan,
         options.mapRawItem(rawItem, index),
         index,
       );
 
       if (!listing) {
+        invalidCount += 1;
         warnings.push(`Skipped ${options.market} raw item at index ${index}.`);
         return;
       }
 
-      const normalizedQuery = normalizeText(options.query);
+      const normalizedQuery = normalizeText(options.queryPlan.normalized || options.query);
       if (
         listing.relevanceScore < options.minRelevanceScore &&
         !listing.normalizedName.includes(normalizedQuery) &&
-        !matchesSearchQuery(options.query, `${listing.title} ${listing.normalizedName}`)
+        !matchesSearchQuery(
+          options.queryPlan.normalized || options.query,
+          `${listing.title} ${listing.normalizedName}`,
+          options.queryPlan.presetId,
+        )
       ) {
+        filteredOutCount += 1;
         warnings.push(`Filtered ${options.market} item by relevance at index ${index}.`);
         return;
       }
 
       listings.push(listing);
     } catch (error) {
+      invalidCount += 1;
       warnings.push(
         error instanceof Error
           ? error.message
@@ -293,21 +360,33 @@ export function normalizeRawItems<TRawItem>(
     listings.length,
     warnings,
   );
+  const confidenceScore =
+    listings.length > 0
+      ? Number(
+          (
+            listings.reduce((sum, listing) => sum + listing.confidenceScore, 0) /
+            listings.length
+          ).toFixed(3),
+        )
+      : 0;
 
   return {
     market: options.market,
     label: options.label,
-    query: options.query,
+    query: options.queryPlan.normalized || options.query,
     status,
     listings,
     stats: {
       receivedCount: options.rawItems.length,
       normalizedCount: listings.length,
       skippedCount: options.rawItems.length - listings.length,
+      filteredOutCount,
+      invalidCount,
       activeCount: listings.filter((listing) => listing.listingType === "active").length,
       soldCount: listings.filter((listing) => listing.listingType === "sold").length,
     },
     warnings,
+    confidenceScore,
     error: buildNormalizationError(status, warnings),
   };
 }

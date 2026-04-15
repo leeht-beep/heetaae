@@ -146,6 +146,7 @@ export const bunjangNormalizer: MarketNormalizer<BunjangRawListing> = {
       market: context.market,
       label: context.label,
       query: context.query,
+      queryPlan: context.queryPlan,
       rawItems: context.rawItems,
       minRelevanceScore: context.minRelevanceScore,
       mapRawItem: (rawItem) => {
@@ -172,6 +173,9 @@ export const bunjangNormalizer: MarketNormalizer<BunjangRawListing> = {
           season,
           category,
           relatedKeywords: buildBunjangKeywords(title, rawItem.searchKeywords),
+          collectedQuery: rawItem.matchedQuery,
+          queryVariantKey: rawItem.queryVariantKey,
+          rawConfidence: rawItem.rawConfidence,
         };
       },
     });

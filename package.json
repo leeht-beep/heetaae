@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "benchmark": "node scripts/run-search-benchmark.mjs",
+    "benchmark:assert": "node scripts/run-search-benchmark.mjs --assert=true"
   },
   "dependencies": {
     "next": "^15.2.0",

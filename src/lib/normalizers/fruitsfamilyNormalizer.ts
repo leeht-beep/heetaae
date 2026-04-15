@@ -248,6 +248,7 @@ export const fruitsfamilyNormalizer: MarketNormalizer<FruitsfamilyRawListing> = 
       market: context.market,
       label: context.label,
       query: context.query,
+      queryPlan: context.queryPlan,
       rawItems: context.rawItems,
       minRelevanceScore: context.minRelevanceScore,
       mapRawItem: (rawItem) => {
@@ -279,6 +280,9 @@ export const fruitsfamilyNormalizer: MarketNormalizer<FruitsfamilyRawListing> = 
           season,
           category,
           relatedKeywords: buildFruitsfamilyKeywords(rawItem),
+          collectedQuery: rawItem.matchedQuery,
+          queryVariantKey: rawItem.queryVariantKey,
+          rawConfidence: rawItem.rawConfidence,
         };
       },
     });

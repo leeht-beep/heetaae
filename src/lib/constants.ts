@@ -43,13 +43,20 @@ export const DEFAULT_RESULT_TABS: Array<{ id: ResultTab; label: string }> = [
 export const NOISE_TERMS = [
   "구매",
   "삽니다",
+  "구합니다",
   "교환",
+  "교신",
   "예약",
+  "예약중",
   "문의",
+  "정품문의",
+  "가격문의",
+  "구매글",
   "wanted",
   "looking for",
-  "찾아요",
-  "삽니다만",
+  "lf",
+  "trade",
+  "reserved",
 ];
 
 export const DEFAULT_MIN_RELEVANCE = 0.34;

@@ -13,6 +13,11 @@ import {
   QUICK_SEARCHES,
 } from "@/lib/constants";
 import {
+  getSearchCategoryPreset,
+  listSearchCategoryPresets,
+} from "@/lib/search/presets";
+import {
+  CategoryPresetId,
   CostSettings,
   MarketListing,
   ProviderExecutionStatus,
@@ -28,10 +33,19 @@ import {
 } from "@/lib/utils/format";
 
 type SelectableListing = MarketListing | RecommendedListing;
+type SearchPresetOption = CategoryPresetId | "auto";
 
 interface ResellWorkbenchProps {
   initialData: SearchResponse;
 }
+
+const SEARCH_PRESET_OPTIONS = [
+  { id: "auto" as const, label: "자동 감지" },
+  ...listSearchCategoryPresets().map((preset) => ({
+    id: preset.id,
+    label: preset.label,
+  })),
+];
 
 function statusTone(status: ProviderExecutionStatus): string {
   switch (status) {
@@ -42,6 +56,8 @@ function statusTone(status: ProviderExecutionStatus): string {
     case "partial":
       return "border-amber-200 bg-amber-50 text-amber-700";
     case "timeout":
+    case "blocked":
+    case "parse_error":
     case "parsing_failure":
     case "error":
     default:
@@ -53,6 +69,9 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
   const [queryInput, setQueryInput] = useState(initialData.searchTerm);
   const [costs, setCosts] = useState(initialData.costs);
   const [data, setData] = useState(initialData);
+  const [selectedPreset, setSelectedPreset] = useState<SearchPresetOption>(
+    initialData.queryPlan.presetSource === "user" ? initialData.queryPlan.presetId : "auto",
+  );
   const [activeTab, setActiveTab] = useState<ResultTab>("recommended");
   const [selectedListing, setSelectedListing] = useState<SelectableListing | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -60,11 +79,24 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
   const [isPending, startTransition] = useTransition();
 
   const failingMarkets = data.marketResults.filter((result) =>
-    ["partial", "timeout", "parsing_failure", "error"].includes(result.status),
+    ["partial", "timeout", "parse_error", "parsing_failure", "blocked", "error"].includes(result.status),
   );
   const emptyMarkets = data.marketResults.filter((result) => result.status === "empty");
+  const lowConfidenceMarkets = data.marketResults.filter(
+    (result) =>
+      (result.status === "success" || result.status === "partial") &&
+      result.confidenceScore < 0.55,
+  );
+  const showLowConfidenceNotice =
+    lowConfidenceMarkets.length > 0 ||
+    (data.hasAnySuccessfulMarket && data.listings.length > 0 && data.listings.length < 5);
+  const isDevelopment = process.env.NODE_ENV !== "production";
 
-  const executeSearch = (nextQuery = queryInput, nextCosts: CostSettings = costs) => {
+  const executeSearch = (
+    nextQuery = queryInput,
+    nextCosts: CostSettings = costs,
+    nextPreset: SearchPresetOption = selectedPreset,
+  ) => {
     const normalizedQuery = nextQuery.trim() || DEFAULT_SEARCH_TERM;
     const params = new URLSearchParams({
       q: normalizedQuery,
@@ -76,6 +108,9 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
       platformFeeRate: String(nextCosts.platformFeeRate),
       targetMarginRate: String(nextCosts.targetMarginRate),
     });
+    if (nextPreset !== "auto") {
+      params.set("preset", nextPreset);
+    }
 
     setError(null);
     setIsLoading(true);
@@ -93,6 +128,7 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
           setData(payload);
           setCosts(nextCosts);
           setQueryInput(payload.searchTerm);
+          setSelectedPreset(nextPreset);
           setActiveTab("recommended");
           setSelectedListing(null);
         } catch (searchError) {
@@ -143,7 +179,7 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
                 className="mt-6 flex flex-col gap-3 sm:flex-row"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  executeSearch(queryInput, costs);
+                  executeSearch(queryInput, costs, selectedPreset);
                 }}
               >
                 <input
@@ -152,6 +188,19 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
                   value={queryInput}
                   onChange={(event) => setQueryInput(event.target.value)}
                 />
+                <select
+                  className="soft-input min-h-[58px] sm:w-[180px]"
+                  value={selectedPreset}
+                  onChange={(event) =>
+                    setSelectedPreset(event.target.value as SearchPresetOption)
+                  }
+                >
+                  {SEARCH_PRESET_OPTIONS.map((preset) => (
+                    <option key={preset.id} value={preset.id}>
+                      {preset.label}
+                    </option>
+                  ))}
+                </select>
                 <button className="soft-button bg-ink text-white" type="submit">
                   {isLoading || isPending ? "검색중..." : "통합 검색"}
                 </button>
@@ -165,7 +214,7 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
                     type="button"
                     onClick={() => {
                       setQueryInput(item);
-                      executeSearch(item, costs);
+                      executeSearch(item, costs, selectedPreset);
                     }}
                   >
                     {item}
@@ -194,6 +243,41 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
                   확인해 주세요.
                 </div>
               ) : null}
+
+              {data.alternativeQueries.length > 0 ? (
+                <div className="mt-4 rounded-[1.2rem] border border-line bg-white/80 px-4 py-3">
+                  <p className="text-sm font-semibold text-ink">대안 검색어</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {data.alternativeQueries.map((item) => (
+                      <button
+                        key={item}
+                        className="tag-chip"
+                        type="button"
+                        onClick={() => {
+                          setQueryInput(item);
+                          executeSearch(item, costs, selectedPreset);
+                        }}
+                      >
+                        {item}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {showLowConfidenceNotice ? (
+                <div className="mt-4 rounded-[1.2rem] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  검색 결과 신뢰도가 낮을 수 있습니다.
+                  {lowConfidenceMarkets.length > 0
+                    ? ` 낮은 신뢰도로 수집된 마켓: ${lowConfidenceMarkets
+                        .map((item) => marketLabel(item.sourceMarket))
+                        .join(", ")}`
+                    : ""}
+                  {data.alternativeQueries.length > 0
+                    ? " 아래 대안 검색어로 브랜드만, 모델명만, 또는 핵심 토큰만 다시 검색해보는 것을 권장합니다."
+                    : ""}
+                </div>
+              ) : null}
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
@@ -201,6 +285,10 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
                 <p className="section-title">검색어</p>
                 <p className="mt-3 font-[var(--font-display)] text-2xl font-bold text-ink">
                   {data.searchTerm}
+                </p>
+                <p className="mt-2 text-sm text-muted">
+                  preset {getSearchCategoryPreset(data.queryPlan.presetId).label} ·{" "}
+                  {data.queryPlan.presetSource === "user" ? "수동 선택" : "자동 감지"}
                 </p>
                 <p className="mt-2 text-sm text-muted">
                   정규화된 매물 {data.listings.length}건 / 추천 매입 후보 {data.recommendedListings.length}건
@@ -299,6 +387,10 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
                       <span>응답 시간</span>
                       <strong className="text-ink">{result.durationMs}ms</strong>
                     </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>신뢰도</span>
+                      <strong className="text-ink">{Math.round(result.confidenceScore * 100)}%</strong>
+                    </div>
                   </div>
                   {result.error ? (
                     <p className="mt-4 rounded-2xl bg-coral/8 px-3 py-2 text-sm text-coral">
@@ -315,6 +407,74 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
               ))}
             </div>
           </section>
+
+          {isDevelopment && data.debug ? (
+            <details className="surface-panel p-5 sm:p-6">
+              <summary className="cursor-pointer text-sm font-semibold text-ink">
+                Search Debug
+              </summary>
+              <div className="mt-4 space-y-4 text-sm text-muted">
+                <div className="rounded-2xl bg-mist px-4 py-3">
+                  <p>
+                    normalized query: <strong className="text-ink">{data.queryPlan.normalized}</strong>
+                  </p>
+                  <p className="mt-1">
+                    preset:{" "}
+                    <strong className="text-ink">
+                      {getSearchCategoryPreset(data.queryPlan.presetId).label}
+                    </strong>
+                    {" / "}
+                    source: <strong className="text-ink">{data.queryPlan.presetSource}</strong>
+                  </p>
+                  <p className="mt-1">
+                    cache: <strong className="text-ink">{data.debug.cacheHit ? "hit" : "miss"}</strong> / duration:{" "}
+                    <strong className="text-ink">{data.debug.totalDurationMs}ms</strong>
+                  </p>
+                  <p className="mt-1">
+                    alias matches:{" "}
+                    <strong className="text-ink">
+                      {data.queryPlan.aliasMatches.length > 0
+                        ? data.queryPlan.aliasMatches
+                            .map((match) => `${match.kind}:${match.canonical}`)
+                            .join(", ")
+                        : "none"}
+                    </strong>
+                  </p>
+                  <p className="mt-1">
+                    planned variants:{" "}
+                    <strong className="text-ink">
+                      {data.queryPlan.variants
+                        .slice(0, 5)
+                        .map((variant) => `${variant.label}(${variant.query})`)
+                        .join(" | ")}
+                    </strong>
+                  </p>
+                </div>
+                <div className="grid gap-4 xl:grid-cols-3">
+                  {data.debug.providerDebug.map((provider) => (
+                    <div key={provider.market} className="rounded-2xl border border-line bg-white/80 p-4">
+                      <p className="font-semibold text-ink">{marketLabel(provider.market)}</p>
+                      <p className="mt-1 text-xs">
+                        fallback {provider.fallbackUsed ? "used" : "not used"} / cache {provider.cacheHit ? "hit" : "miss"}
+                      </p>
+                      <div className="mt-3 space-y-2">
+                        {provider.attemptedQueries.map((attempt) => (
+                          <div key={`${provider.market}-${attempt.variantKey}-${attempt.query}`} className="rounded-xl bg-mist px-3 py-2">
+                            <p className="font-medium text-ink">
+                              {attempt.variantLabel}: {attempt.query}
+                            </p>
+                            <p className="mt-1 text-xs">
+                              {providerStatusLabel(attempt.status)} / raw {attempt.rawResultCount} / normalized {attempt.normalizedResultCount ?? 0} / filtered {attempt.filteredOutCount ?? 0}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </details>
+          ) : null}
 
           <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
             <div className="space-y-6">
@@ -380,7 +540,7 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
               pending={isLoading || isPending}
               onChange={setCosts}
               onReset={() => setCosts(DEFAULT_COST_SETTINGS)}
-              onSubmit={() => executeSearch(queryInput, costs)}
+              onSubmit={() => executeSearch(queryInput, costs, selectedPreset)}
             />
           </div>
         </div>

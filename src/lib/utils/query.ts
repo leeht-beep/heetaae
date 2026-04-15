@@ -125,6 +125,32 @@ function pushVariant(target: SearchQueryVariant[], variant: SearchQueryVariant |
   target.push(variant);
 }
 
+function sortVariantsForMercari(variants: SearchQueryVariant[]): SearchQueryVariant[] {
+  const priorityByStrategy: Partial<Record<SearchQueryVariant["strategy"], number>> = {
+    original: 0,
+    brand_model: 1,
+    brand_category: 2,
+    model_only: 3,
+    brand_only: 4,
+    core_tokens: 5,
+    localized_brand_model: 6,
+    brand_alias: 7,
+    model_alias: 8,
+    category_alias: 9,
+  };
+
+  return [...variants].sort((left, right) => {
+    const leftRank = priorityByStrategy[left.strategy] ?? 50;
+    const rightRank = priorityByStrategy[right.strategy] ?? 50;
+
+    if (leftRank !== rightRank) {
+      return leftRank - rightRank;
+    }
+
+    return right.confidence - left.confidence;
+  });
+}
+
 function buildJoinedQuery(parts: Array<string | undefined>): string {
   return parts.filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
 }
@@ -375,6 +401,7 @@ export function buildProviderQueryVariants(
     (entry): entry is AliasLanguage => entry !== "mixed",
   );
   const shouldPrioritizeLocalized =
+    market !== "mercari" &&
     localized &&
     localized.query &&
     !preferredLanguages.some((language) => originalLanguages.includes(language));
@@ -384,7 +411,7 @@ export function buildProviderQueryVariants(
       result,
       buildVariant({
         key: `${market}-localized-brand-model`,
-        label: market === "mercari" ? "Localized brand + model (JP)" : "Localized brand + model",
+        label: "Localized brand + model",
         strategy: "localized_brand_model",
         query: localized.query,
         confidence: applyPresetConfidenceBoost(preset.id, "localized_brand_model", 0.99),
@@ -478,5 +505,7 @@ export function buildProviderQueryVariants(
     );
   });
 
-  return sortVariantsForPreset(preset.id, result);
+  return market === "mercari"
+    ? sortVariantsForMercari(result)
+    : sortVariantsForPreset(preset.id, result);
 }

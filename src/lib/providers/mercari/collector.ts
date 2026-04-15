@@ -47,6 +47,10 @@ import {
 const execFileAsync = promisify(execFile);
 const MERCARI_CACHE_TTL_MS = 45_000;
 const MERCARI_WARMUP_URL = new URL(MERCARI_SEARCH_PATH, MERCARI_BASE_URL).toString();
+const MERCARI_MAX_QUERY_VARIANTS = 2;
+const MERCARI_MIN_STABLE_RESULT_COUNT = 6;
+const MERCARI_MIN_FALLBACK_RESULT_COUNT = 4;
+const MERCARI_MIN_NEXT_VARIANT_BUDGET_MS = 14_000;
 
 interface MercariCollectorMeta extends Record<string, unknown> {
   strategy: "multi_variant_session_aware";
@@ -476,16 +480,20 @@ async function loadPlaywrightModule(): Promise<unknown | null> {
 
   playwrightLoadAttempted = true;
 
-  try {
-    const dynamicImport = Function(
-      "return import('playwright')",
-    ) as () => Promise<unknown>;
-    playwrightModuleCache = await dynamicImport();
-    return playwrightModuleCache;
-  } catch {
-    playwrightModuleCache = null;
-    return null;
+  for (const packageName of ["playwright-core", "playwright"]) {
+    try {
+      const dynamicImport = Function(
+        `return import('${packageName}')`,
+      ) as () => Promise<unknown>;
+      playwrightModuleCache = await dynamicImport();
+      return playwrightModuleCache;
+    } catch {
+      continue;
+    }
   }
+
+  playwrightModuleCache = null;
+  return null;
 }
 
 async function renderMercariSearchHtmlWithPlaywright(
@@ -493,60 +501,53 @@ async function renderMercariSearchHtmlWithPlaywright(
   timeoutMs: number,
   session: MercariSessionState,
 ): Promise<MercariBrowserRenderResult | null> {
-  const playwright = (await loadPlaywrightModule()) as
-    | {
-        chromium?: {
-          launchPersistentContext: (
-            userDataDir: string,
-            options: Record<string, unknown>,
-          ) => Promise<{
-            pages: () => Array<{
-              goto: (
-                targetUrl: string,
-                options: Record<string, unknown>,
-              ) => Promise<unknown>;
-              waitForLoadState: (
-                state: string,
-                options?: Record<string, unknown>,
-              ) => Promise<unknown>;
-              content: () => Promise<string>;
-            }>;
-            newPage: () => Promise<{
-              goto: (
-                targetUrl: string,
-                options: Record<string, unknown>,
-              ) => Promise<unknown>;
-              waitForLoadState: (
-                state: string,
-                options?: Record<string, unknown>,
-              ) => Promise<unknown>;
-              content: () => Promise<string>;
-            }>;
-            close: () => Promise<void>;
+  const chromeExecutablePath = resolveChromeExecutablePath();
+  const playwright = (await loadPlaywrightModule()) as {
+    chromium?: {
+      launch: (options: Record<string, unknown>) => Promise<{
+        newContext: (options: Record<string, unknown>) => Promise<{
+          newPage: () => Promise<{
+            goto: (
+              targetUrl: string,
+              options: Record<string, unknown>,
+            ) => Promise<unknown>;
+            waitForLoadState: (
+              state: string,
+              options?: Record<string, unknown>,
+            ) => Promise<unknown>;
+            waitForFunction: (
+              pageFunction: () => boolean,
+              options?: Record<string, unknown>,
+            ) => Promise<unknown>;
+            addInitScript: (script: () => void) => Promise<unknown>;
+            content: () => Promise<string>;
           }>;
-        };
-      }
-    | null;
+          close: () => Promise<void>;
+        }>;
+        close: () => Promise<void>;
+      }>;
+    };
+  } | null;
 
-  if (!playwright?.chromium) {
+  if (!playwright?.chromium || !chromeExecutablePath) {
     return null;
   }
 
-  await mkdir(session.profileDir, { recursive: true });
   await waitForMercariRateLimit();
 
   const viewport = parseWindowSize(session.fingerprint.windowSize ?? MERCARI_WINDOW_SIZE);
-  const context = await playwright.chromium.launchPersistentContext(session.profileDir, {
+  const browser = await playwright.chromium.launch({
+    executablePath: chromeExecutablePath,
     headless: true,
-    viewport,
-    locale: "ja-JP",
-    userAgent: session.fingerprint.userAgent || MERCARI_DEFAULT_USER_AGENT,
-    extraHTTPHeaders: buildMercariRequestHeaders(session.fingerprint, MERCARI_WARMUP_URL),
   });
 
   try {
-    const existingPage = context.pages()[0];
-    const page = existingPage ?? (await context.newPage());
+    const context = await browser.newContext({
+      viewport,
+      locale: "ja-JP",
+      userAgent: session.fingerprint.userAgent || MERCARI_DEFAULT_USER_AGENT,
+    });
+    const page = await context.newPage();
     await page.goto(url, {
       waitUntil: "domcontentloaded",
       timeout: Math.min(timeoutMs, MERCARI_BROWSER_TIMEOUT_MS),
@@ -556,13 +557,34 @@ async function renderMercariSearchHtmlWithPlaywright(
         timeout: Math.min(5000, Math.max(timeoutMs - 1000, 1000)),
       })
       .catch(() => undefined);
+    await page
+      .waitForFunction(
+        () => {
+          const bodyText = document.body?.innerText ?? "";
+          return Boolean(
+            document.querySelector('[data-testid="item-cell"]') ||
+              document.querySelector('a[href*="/item/"]') ||
+              /検索結果はありません|該当する商品が見つかりませんでした|見つかりませんでした/.test(
+                bodyText,
+              ),
+          );
+        },
+        {
+          timeout: Math.min(12_000, Math.max(timeoutMs - 1000, 2_500)),
+        },
+      )
+      .catch(() => undefined);
+
+    const html = await page.content();
+    await context.close().catch(() => undefined);
 
     return {
-      html: await page.content(),
+      html,
       renderer: "playwright",
+      chromeExecutablePath,
     };
   } finally {
-    await context.close().catch(() => undefined);
+    await browser.close().catch(() => undefined);
   }
 }
 
@@ -724,6 +746,36 @@ function buildMercariStatusResult(
     requestCount: 0,
     ...options,
   };
+}
+
+function shouldTryMercariFallbackVariant(options: {
+  collectedCount: number;
+  attemptCount: number;
+  remainingBudgetMs: number;
+  lastAttemptStatus: ProviderExecutionStatus;
+  lastAttemptItemCount: number;
+}) {
+  if (options.remainingBudgetMs < MERCARI_MIN_NEXT_VARIANT_BUDGET_MS) {
+    return false;
+  }
+
+  if (options.collectedCount === 0) {
+    return true;
+  }
+
+  if (
+    options.lastAttemptStatus === "blocked" ||
+    options.lastAttemptStatus === "timeout" ||
+    options.lastAttemptStatus === "parse_error"
+  ) {
+    return true;
+  }
+
+  if (options.attemptCount === 1) {
+    return options.collectedCount < MERCARI_MIN_STABLE_RESULT_COUNT;
+  }
+
+  return options.lastAttemptItemCount < MERCARI_MIN_FALLBACK_RESULT_COUNT;
 }
 
 async function collectMercariStatus(
@@ -980,8 +1032,11 @@ async function collectMercariVariant(
         attemptSession,
       );
       const remainingAfterActive = deadlineAt - Date.now();
+      const shouldCollectSold =
+        remainingAfterActive >= 16_000 &&
+        activeResult.items.length < Math.max(4, Math.ceil(limit * 0.35));
       const soldResult =
-        remainingAfterActive >= 18_000
+        shouldCollectSold
           ? await collectMercariStatus(
               query,
               "sold_out",
@@ -992,7 +1047,7 @@ async function collectMercariVariant(
               attemptSession,
             )
           : buildMercariStatusResult(buildMercariSearchUrl(query, "sold_out"), {
-              source: "failed",
+              source: "empty",
               renderer: "http",
               warnings: [
                 "[mercari:sold_out] skipped sold-out collection to preserve active results within the provider timeout budget.",
@@ -1158,7 +1213,11 @@ export const mercariRealCollector: RawMarketCollector<MercariRawListing, Mercari
     const cached = await withMemoryCache(cacheKey, MERCARI_CACHE_TTL_MS, async () => {
       const startedAt = Date.now();
       const perStatusLimit = Math.max(Math.ceil(context.limit / 2), 10);
-      const variants = buildProviderQueryVariants(context.queryPlan, "mercari").slice(0, 4);
+      const variants = buildProviderQueryVariants(context.queryPlan, "mercari").slice(
+        0,
+        MERCARI_MAX_QUERY_VARIANTS,
+      );
+      const collectorDeadlineAt = startedAt + context.timeoutMs - 800;
       const attempts: ProviderQueryAttemptDebug[] = [];
       const statusResults: MercariCollectorMeta["statusResults"] = [];
       const allWarnings: string[] = [];
@@ -1270,11 +1329,18 @@ export const mercariRealCollector: RawMarketCollector<MercariRawListing, Mercari
           collectedItems,
           (item) => item.itemId,
         );
+        const remainingBudgetMs = collectorDeadlineAt - Date.now();
+        const shouldTryFallback = shouldTryMercariFallbackVariant({
+          collectedCount: dedupedCollected.length,
+          attemptCount: attempts.length,
+          remainingBudgetMs,
+          lastAttemptStatus: variantResult.status,
+          lastAttemptItemCount: variantResult.items.length,
+        });
 
         if (
           dedupedCollected.length >= context.limit ||
-          (attempts.length === 1 &&
-            dedupedCollected.length >= Math.max(10, Math.ceil(context.limit * 0.7)))
+          !shouldTryFallback
         ) {
           break;
         }

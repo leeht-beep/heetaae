@@ -7,7 +7,7 @@ export const MERCARI_DEFAULT_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36";
 export const MERCARI_DEFAULT_ACCEPT_LANGUAGE = "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7";
 export const MERCARI_HTTP_TIMEOUT_MS = 8000;
-export const MERCARI_BROWSER_TIMEOUT_MS = 22000;
+export const MERCARI_BROWSER_TIMEOUT_MS = 18000;
 export const MERCARI_BROWSER_VIRTUAL_TIME_BUDGET_MS = 7000;
 export const MERCARI_REQUEST_INTERVAL_MS = 650;
 export const MERCARI_WINDOW_SIZE = "1600,5000";
@@ -20,7 +20,7 @@ export const MERCARI_SESSION_ROOT_DIR = path.join(
   "mercari-sessions",
 );
 export const MERCARI_BROWSER_RENDERER =
-  process.env.MERCARI_BROWSER_RENDERER ?? "auto";
+  process.env.MERCARI_BROWSER_RENDERER ?? "playwright";
 
 export interface MercariRequestFingerprint {
   id: string;

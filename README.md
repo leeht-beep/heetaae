@@ -65,23 +65,22 @@ Mercari real collection now uses a session-aware collector in:
 What changed:
 
 - Stronger blocked detection based on challenge markers plus missing item signals
-- Rotating request fingerprints instead of a single static request shape
-- Persistent browser session directories per fingerprint
-- Warmup pass for browser sessions before search requests
-- Cooldown handling when a fingerprint is challenged
-- Optional Playwright browser fallback when available locally
+- Mercari now defaults to a Playwright-based renderer using the local Chrome/Edge binary for real searches
+- Mercari query variants are ordered for stability first: original query, brand/model variants, then localized Japanese fallbacks
+- Sold-out scraping is skipped when the active search already consumed most of the provider budget, so active results return reliably instead of timing out
+- Session metadata and fingerprint rotation remain available for fallback and debug
 - Debug summary includes blocked reasons, requested URLs, session ID, fingerprint ID, cooldown, warmup usage, and browser fallback usage
 
 Useful environment variables:
 
-- `MERCARI_BROWSER_RENDERER=auto|chrome|playwright`
+- `MERCARI_BROWSER_RENDERER=playwright|chrome|auto`
 - `MERCARI_SESSION_ROOT_DIR=/custom/path`
 - `MERCARI_CHROME_PATH=/path/to/chrome`
 
 Notes:
 
-- `auto` prefers Chrome dump-dom first and only tries Playwright as a browser fallback.
-- Playwright is optional. If the package is not installed, the collector falls back gracefully.
+- The default renderer is `playwright`, backed by the `playwright-core` dependency in `package.json`.
+- `auto` can still be used for experimentation, but stable local collection currently prefers Playwright first.
 - Persistent session directories live under the configured Mercari session root.
 
 ## Bunjang Reliability Notes

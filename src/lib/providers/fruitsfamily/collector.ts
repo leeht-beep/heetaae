@@ -1,4 +1,4 @@
-import { FruitsfamilyRawListing } from "@/lib/fixtures/types";
+﻿import type { FruitsfamilyRawListing } from "@/lib/fixtures/types";
 import {
   buildCollectorEnvelope,
   createProviderError,
@@ -339,3 +339,4 @@ export const fruitsfamilyRealCollector: RawMarketCollector<
     };
   },
 };
+

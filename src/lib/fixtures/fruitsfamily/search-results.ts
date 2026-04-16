@@ -1,5 +1,6 @@
-import { FRUITSFAMILY_MOCK_LISTINGS } from "@/lib/mock";
+﻿import type { FRUITSFAMILY_MOCK_LISTINGS } from "@/lib/mock";
 import { FixtureResponseMeta, FruitsfamilyRawListing } from "@/lib/fixtures/types";
+import { FRUITSFAMILY_MOCK_LISTINGS as FRUITSFAMILY_MOCK_LISTINGS_VALUE } from "@/lib/mock";
 import { MockMarketListing } from "@/lib/types/market";
 import { matchesSearchQuery } from "@/lib/utils/normalize";
 
@@ -40,7 +41,7 @@ function buildSearchText(item: FruitsfamilyRawListing): string {
     .join(" ");
 }
 
-export const FRUITSFAMILY_RAW_FIXTURE_ITEMS: FruitsfamilyRawListing[] = FRUITSFAMILY_MOCK_LISTINGS.map(
+export const FRUITSFAMILY_RAW_FIXTURE_ITEMS: FruitsfamilyRawListing[] = FRUITSFAMILY_MOCK_LISTINGS_VALUE.map(
   toFruitsfamilyRawListing,
 );
 
@@ -69,3 +70,4 @@ export function buildFruitsfamilyMalformedFixtureItem(): FruitsfamilyRawListing 
     isSold: false,
   };
 }
+

@@ -66,7 +66,7 @@ What changed:
 
 - Stronger blocked detection based on challenge markers plus missing item signals
 - Mercari now defaults to a Playwright-based renderer using the local Chrome/Edge binary for real searches
-- Playwright collection now extracts item cards from live DOM first, then falls back to HTML parsing only when needed
+- Playwright collection now captures Mercari's live `https://api.mercari.jp/v2/entities:search` response first, then falls back to DOM card parsing and finally HTML parsing only when needed
 - Mercari query variants are ordered for stability first: original query, brand/model variants, then localized Japanese fallbacks
 - Sold-out scraping is skipped when the active search already consumed most of the provider budget, so active results return reliably instead of timing out
 - Session metadata and fingerprint rotation remain available for fallback and debug
@@ -83,6 +83,7 @@ Notes:
 - The default renderer is `playwright`, backed by the `playwright-core` dependency in `package.json`.
 - `auto` can still be used for experimentation, but stable local collection currently prefers Playwright first.
 - Persistent session directories live under the configured Mercari session root.
+- `npm run smoke:mercari -- "Supreme Box Logo Hoodie 24FW"` now validates the isolated Mercari collector and prints live `titleText`, `priceJpy`, `itemUrl`, and `imageUrl` samples before app-level integration.
 
 ## Bunjang Reliability Notes
 

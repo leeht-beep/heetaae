@@ -1,4 +1,4 @@
-import { AliasLanguage, MarketId } from "@/lib/types/market";
+import type { AliasLanguage, MarketId } from "@/lib/types/market";
 
 export type AliasDictionaryKind = "brand" | "model" | "category" | "market";
 

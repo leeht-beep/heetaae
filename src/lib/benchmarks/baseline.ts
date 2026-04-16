@@ -1,4 +1,4 @@
-import { MarketId } from "@/lib/types/market";
+﻿import type { MarketId } from "@/lib/types/market";
 
 export interface ProviderRegressionBaseline {
   minUsefulRate: number;
@@ -47,3 +47,4 @@ export const CORE_QUERY_REGRESSION_BASELINE: Record<string, QueryRegressionBasel
   "comoli-tie-locken-ko": { minProvidersWithResults: 1 },
   "porter-classic-newton-ja": { minProvidersWithResults: 1 },
 };
+

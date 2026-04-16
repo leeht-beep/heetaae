@@ -1,5 +1,5 @@
 import { MARKET_THEME } from "@/lib/constants";
-import { MarketAnalysis } from "@/lib/types/market";
+import type { MarketAnalysis } from "@/lib/types/market";
 import { formatCurrency, formatTrend, marketLabel } from "@/lib/utils/format";
 
 interface MarketInsightsTableProps {
@@ -10,9 +10,9 @@ export function MarketInsightsTable({ marketAnalyses }: MarketInsightsTableProps
   return (
     <section className="surface-panel overflow-hidden">
       <div className="border-b border-line px-5 py-5 sm:px-6">
-        <p className="section-title">마켓 스냅샷</p>
+        <p className="section-title">마켓 인사이트</p>
         <h2 className="mt-2 font-[var(--font-display)] text-2xl font-bold text-ink">
-          마켓별 평균가와 거래량 신호
+          마켓별 평균가와 거래 흐름
         </h2>
       </div>
 
@@ -25,9 +25,9 @@ export function MarketInsightsTable({ marketAnalyses }: MarketInsightsTableProps
               <th>중간값</th>
               <th>최저 / 최고</th>
               <th>판매중 / 완료</th>
-              <th>7일 / 14일 / 30일</th>
+              <th>7 / 14 / 30일</th>
               <th>추세</th>
-              <th>유동성</th>
+              <th>활발도</th>
             </tr>
           </thead>
           <tbody>
@@ -83,13 +83,15 @@ export function MarketInsightsTable({ marketAnalyses }: MarketInsightsTableProps
                 {marketLabel(analysis.sourceMarket)}
               </span>
               <span className="text-sm font-semibold text-muted">
-                유동성 {analysis.liquidityScore}점
+                활발도 {analysis.liquidityScore}점
               </span>
             </div>
 
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <div>
-                <p className="text-xs uppercase tracking-[0.15em] text-muted">평균가 / 중간값</p>
+                <p className="text-xs uppercase tracking-[0.15em] text-muted">
+                  평균가 / 중간값
+                </p>
                 <p className="mt-2 font-semibold text-ink">
                   {formatCurrency(analysis.marketAveragePrice, "KRW")}
                 </p>

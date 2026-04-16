@@ -1,15 +1,15 @@
-import { CostSettings, MarketId, ResultTab } from "@/lib/types/market";
+import type { CostSettings, MarketId, ResultTab } from "@/lib/types/market";
 
 export const MARKET_LABELS: Record<MarketId, string> = {
-  mercari: "메루카리",
+  mercari: "Mercari",
   bunjang: "번개장터",
   fruitsfamily: "FruitsFamily",
 };
 
 export const MARKET_THEME: Record<MarketId, string> = {
-  mercari: "bg-teal/10 text-teal border-teal/20",
-  bunjang: "bg-coral/10 text-coral border-coral/20",
-  fruitsfamily: "bg-sand text-ink border-line",
+  mercari: "border-teal/20 bg-teal/10 text-teal",
+  bunjang: "border-coral/20 bg-coral/10 text-coral",
+  fruitsfamily: "border-line bg-sand text-ink",
 };
 
 export const DEFAULT_SEARCH_TERM = "Supreme Box Logo Hoodie";
@@ -35,14 +35,16 @@ export const DEFAULT_RESULT_TABS: Array<{ id: ResultTab; label: string }> = [
   { id: "all", label: "전체" },
   { id: "active", label: "판매중" },
   { id: "sold", label: "판매완료" },
-  { id: "mercari", label: "메루카리" },
+  { id: "mercari", label: "Mercari" },
   { id: "bunjang", label: "번개장터" },
   { id: "fruitsfamily", label: "FruitsFamily" },
 ];
 
 export const NOISE_TERMS = [
-  "구매",
   "삽니다",
+  "구매",
+  "구매글",
+  "구해요",
   "구합니다",
   "교환",
   "교신",
@@ -51,12 +53,12 @@ export const NOISE_TERMS = [
   "문의",
   "정품문의",
   "가격문의",
-  "구매글",
   "wanted",
   "looking for",
   "lf",
   "trade",
   "reserved",
+  "hold",
 ];
 
 export const DEFAULT_MIN_RELEVANCE = 0.34;

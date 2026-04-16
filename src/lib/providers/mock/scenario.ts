@@ -1,4 +1,4 @@
-import { MarketId } from "@/lib/types/market";
+﻿import type { MarketId } from "@/lib/types/market";
 
 export type MockScenario = "timeout" | "error" | "partial" | "parsing_failure";
 
@@ -26,3 +26,4 @@ export function resolveMockScenario(query: string, market: MarketId): MockScenar
 export function stripMockScenarioTokens(query: string): string {
   return query.replace(SCENARIO_PATTERN, "").replace(/\s+/g, " ").trim();
 }
+

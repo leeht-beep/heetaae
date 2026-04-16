@@ -1,6 +1,10 @@
-import {
+﻿import type {
   CORE_QUERY_REGRESSION_BASELINE,
   PROVIDER_REGRESSION_BASELINE,
+} from "@/lib/benchmarks/baseline";
+import {
+  CORE_QUERY_REGRESSION_BASELINE as CORE_QUERY_REGRESSION_BASELINE_VALUE,
+  PROVIDER_REGRESSION_BASELINE as PROVIDER_REGRESSION_BASELINE_VALUE,
 } from "@/lib/benchmarks/baseline";
 import { filterBenchmarkDataset } from "@/lib/benchmarks/dataset";
 import {
@@ -463,7 +467,7 @@ function buildPresetComparisonNotes(
 
   if (best && best.selectedPreset !== "auto") {
     notes.push(
-      `auto보다 ${getPresetLabel(best.selectedPreset)} preset이 더 높은 커버리지/정확도를 보였습니다.`,
+      `auto蹂대떎 ${getPresetLabel(best.selectedPreset)} preset?????믪? 而ㅻ쾭由ъ?/?뺥솗?꾨? 蹂댁??듬땲??`,
     );
   }
 
@@ -474,7 +478,7 @@ function buildPresetComparisonNotes(
     best.normalizedResultTotal > autoVariant.normalizedResultTotal
   ) {
     notes.push(
-      `${getPresetLabel(best.selectedPreset)} preset이 auto 대비 정규화 결과를 ${best.normalizedResultTotal - autoVariant.normalizedResultTotal}건 더 확보했습니다.`,
+      `${getPresetLabel(best.selectedPreset)} preset??auto ?鍮??뺢퇋??寃곌낵瑜?${best.normalizedResultTotal - autoVariant.normalizedResultTotal}嫄????뺣낫?덉뒿?덈떎.`,
     );
   }
 
@@ -484,7 +488,7 @@ function buildPresetComparisonNotes(
     recommendedVariant.selectedPreset === best?.selectedPreset
   ) {
     notes.push(
-      `이 검색어의 권장 preset(${getPresetLabel(benchmarkCase.recommendedPreset)})이 실제로도 가장 잘 맞았습니다.`,
+      `??寃?됱뼱??沅뚯옣 preset(${getPresetLabel(benchmarkCase.recommendedPreset)})???ㅼ젣濡쒕룄 媛????留욎븯?듬땲??`,
     );
   }
 
@@ -494,7 +498,7 @@ function buildPresetComparisonNotes(
     recommendedVariant.selectedPreset !== best?.selectedPreset
   ) {
     notes.push(
-      `권장 preset(${getPresetLabel(benchmarkCase.recommendedPreset)})보다 ${getPresetLabel(best!.selectedPreset)} preset 성능이 더 좋았습니다.`,
+      `沅뚯옣 preset(${getPresetLabel(benchmarkCase.recommendedPreset)})蹂대떎 ${getPresetLabel(best!.selectedPreset)} preset ?깅뒫????醫뗭븯?듬땲??`,
     );
   }
 
@@ -563,49 +567,49 @@ function buildTuningPriorities(
 
   if (mercariJapaneseWeak.length >= 2) {
     priorities.push(
-      `Mercari 일본어 alias 확장이 우선입니다. 일본어/혼합 검색어 ${mercariJapaneseWeak.length}건에서 결과가 약했습니다.`,
+      `Mercari ?쇰낯??alias ?뺤옣???곗꽑?낅땲?? ?쇰낯???쇳빀 寃?됱뼱 ${mercariJapaneseWeak.length}嫄댁뿉??寃곌낵媛 ?쏀뻽?듬땲??`,
     );
   }
 
   if (providerSummary.mercari.fallbackRate > 0.55) {
     priorities.push(
-      "Mercari는 fallback 의존도가 높습니다. localized brand/model variant 순서를 더 앞당기거나 일본어 별칭 사전을 보강해보세요.",
+      "Mercari??fallback ?섏〈?꾧? ?믪뒿?덈떎. localized brand/model variant ?쒖꽌瑜????욌떦湲곌굅???쇰낯??蹂꾩묶 ?ъ쟾??蹂닿컯?대낫?몄슂.",
     );
   }
 
   if (bunjangModelOnlyWeak.length >= 1 || providerSummary.bunjang.fallbackRate > 0.5) {
     priorities.push(
-      "번개장터는 모델명 단독 또는 축약형 검색이 약합니다. brand + model 조합과 한글 별칭 우선순위를 더 높이는 편이 좋습니다.",
+      "踰덇컻?ν꽣??紐⑤뜽紐??⑤룆 ?먮뒗 異뺤빟??寃?됱씠 ?쏀빀?덈떎. brand + model 議고빀怨??쒓? 蹂꾩묶 ?곗꽑?쒖쐞瑜????믪씠???몄씠 醫뗭뒿?덈떎.",
     );
   }
 
   if (fruitsLowConfidence >= Math.max(2, Math.ceil(queryReports.length * 0.25))) {
     priorities.push(
-      "FruitsFamily 상위 결과 confidence가 낮은 편입니다. 브랜드 추출과 title normalization 규칙을 먼저 보강해보세요.",
+      "FruitsFamily ?곸쐞 寃곌낵 confidence媛 ??? ?몄엯?덈떎. 釉뚮옖??異붿텧怨?title normalization 洹쒖튃??癒쇱? 蹂닿컯?대낫?몄슂.",
     );
   }
 
   if (presetBetterThanAuto.length >= Math.max(2, Math.ceil(queryReports.length * 0.2))) {
     priorities.push(
-      `auto preset보다 수동 preset이 더 나은 검색어가 ${presetBetterThanAuto.length}건 있습니다. query detection 규칙과 alias mapping을 다시 조정해볼 가치가 큽니다.`,
+      `auto preset蹂대떎 ?섎룞 preset?????섏? 寃?됱뼱媛 ${presetBetterThanAuto.length}嫄??덉뒿?덈떎. query detection 洹쒖튃怨?alias mapping???ㅼ떆 議곗젙?대낵 媛移섍? ?쎈땲??`,
     );
   }
 
   if (cameraPresetWins >= 1) {
     priorities.push(
-      `camera preset이 카메라 쿼리 ${cameraPresetWins}건에서 가장 좋은 결과를 냈습니다. 숫자 모델 토큰 보존 규칙을 카메라 alias 쪽에도 더 확장해보세요.`,
+      `camera preset??移대찓??荑쇰━ ${cameraPresetWins}嫄댁뿉??媛??醫뗭? 寃곌낵瑜??덉뒿?덈떎. ?レ옄 紐⑤뜽 ?좏겙 蹂댁〈 洹쒖튃??移대찓??alias 履쎌뿉?????뺤옣?대낫?몄슂.`,
     );
   }
 
   if (furniturePresetWins >= 1) {
     priorities.push(
-      `vintage_furniture preset이 가구 쿼리 ${furniturePresetWins}건에서 우세했습니다. 라인명/체어/테이블 카테고리 alias를 더 늘리면 효과가 클 수 있습니다.`,
+      `vintage_furniture preset??媛援?荑쇰━ ${furniturePresetWins}嫄댁뿉???곗꽭?덉뒿?덈떎. ?쇱씤紐?泥댁뼱/?뚯씠釉?移댄뀒怨좊━ alias瑜????섎━硫??④낵媛 ?????덉뒿?덈떎.`,
     );
   }
 
   if (priorities.length === 0) {
     priorities.push(
-      "현재 벤치마크에서는 큰 병목이 보이지 않습니다. weak query와 preset comparison을 기준으로 alias를 미세 조정하면 좋습니다.",
+      "?꾩옱 踰ㅼ튂留덊겕?먯꽌????蹂묐ぉ??蹂댁씠吏 ?딆뒿?덈떎. weak query? preset comparison??湲곗??쇰줈 alias瑜?誘몄꽭 議곗젙?섎㈃ 醫뗭뒿?덈떎.",
     );
   }
 
@@ -620,7 +624,7 @@ function buildRegressionReport(
   const warnings: string[] = [];
 
   (Object.keys(providerSummary) as MarketId[]).forEach((market) => {
-    const baseline = PROVIDER_REGRESSION_BASELINE[market];
+    const baseline = PROVIDER_REGRESSION_BASELINE_VALUE[market];
     const summary = providerSummary[market];
 
     if (summary.usefulRate < baseline.minUsefulRate) {
@@ -649,7 +653,7 @@ function buildRegressionReport(
   });
 
   queryReports.forEach((report) => {
-    const baseline = CORE_QUERY_REGRESSION_BASELINE[report.id];
+    const baseline = CORE_QUERY_REGRESSION_BASELINE_VALUE[report.id];
     if (!baseline) {
       return;
     }
@@ -830,3 +834,4 @@ export async function runSearchBenchmarks(
     regression,
   };
 }
+

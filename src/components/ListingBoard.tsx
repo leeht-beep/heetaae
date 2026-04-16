@@ -1,6 +1,6 @@
 import Image from "next/image";
 import { DEFAULT_RESULT_TABS, MARKET_THEME } from "@/lib/constants";
-import {
+import type {
   MarketListing,
   RecommendedListing,
   ResultTab,
@@ -84,7 +84,7 @@ export function ListingBoard({
             </h2>
           </div>
           <p className="text-sm text-muted">
-            추천 탭은 현재 비용 조건 기준으로 메루카리 매입 후보를 우선 정렬합니다.
+            추천 탭은 현재 비용 조건 기준으로 매입 매력이 높은 순서대로 정렬합니다.
           </p>
         </div>
       </div>
@@ -113,7 +113,7 @@ export function ListingBoard({
 
       {visibleListings.length === 0 ? (
         <div className="px-5 py-12 text-center text-sm text-muted sm:px-6">
-          현재 조건에서는 표시할 매물이 없습니다. 검색어를 더 좁히거나 비용 조건을 조정해 보세요.
+          현재 조건에서 보여줄 매물이 없습니다. 검색어를 더 좁히거나 비용 조건을 조정해보세요.
         </div>
       ) : (
         <>
@@ -132,7 +132,7 @@ export function ListingBoard({
               </thead>
               <tbody>
                 {visibleListings.map((listing) => (
-                  <tr key={listing.id}>
+                  <tr key={`${listing.sourceMarket}-${listing.id}`}>
                     <td>
                       <div className="flex gap-4">
                         <Image
@@ -213,7 +213,7 @@ export function ListingBoard({
           <div className="grid gap-4 p-5 lg:hidden">
             {visibleListings.map((listing) => (
               <article
-                key={listing.id}
+                key={`${listing.sourceMarket}-${listing.id}`}
                 className="rounded-[1.4rem] border border-line bg-white/75 p-4"
               >
                 <div className="flex gap-4">
@@ -270,7 +270,7 @@ export function ListingBoard({
                   </span>
                   {isRecommendedListing(listing) ? (
                     <strong className="text-ink">
-                      순이익 {formatCurrency(listing.estimatedProfit, "KRW")}
+                      수익 {formatCurrency(listing.estimatedProfit, "KRW")}
                     </strong>
                   ) : (
                     <a

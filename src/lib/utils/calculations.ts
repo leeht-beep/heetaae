@@ -1,5 +1,6 @@
-import { MARKET_LABELS } from "@/lib/constants";
+﻿import type { MARKET_LABELS } from "@/lib/constants";
 import { getSearchCategoryPreset } from "@/lib/search/presets";
+import { MARKET_LABELS as MARKET_LABELS_VALUE } from "@/lib/constants";
 import {
   CategoryPresetId,
   ComparableGroup,
@@ -272,38 +273,38 @@ function applyPresetSpecificFeedback(
       if (context.numericModelDiversity <= 2 && context.comparableCoverage >= 0.52) {
         addUnique(
           context.recommendationReasons,
-          "카메라 특성상 모델 세대와 숫자 토큰이 잘 맞는 비교군이 확보되어 모델 혼입 위험이 낮습니다.",
+          "移대찓???뱀꽦??紐⑤뜽 ?몃?? ?レ옄 ?좏겙????留욌뒗 鍮꾧탳援곗씠 ?뺣낫?섏뼱 紐⑤뜽 ?쇱엯 ?꾪뿕????뒿?덈떎.",
         );
       }
 
       if (context.numericModelDiversity >= 4) {
         addUnique(
           context.blockerReasons,
-          "비슷한 숫자 모델이 많이 섞여 있어 바디 세대, 렌즈 포함 여부, 번들 구성 혼입 가능성이 큽니다.",
+          "鍮꾩듂???レ옄 紐⑤뜽??留롮씠 ?욎뿬 ?덉뼱 諛붾뵒 ?몃?, ?뚯쫰 ?ы븿 ?щ?, 踰덈뱾 援ъ꽦 ?쇱엯 媛?μ꽦???쎈땲??",
         );
       }
 
       if (context.confidenceRate < 0.62 || context.fieldCompletenessRate < 0.7) {
         addUnique(
           context.blockerReasons,
-          "셔터카운트, 박스 구성, 렌즈 포함 여부처럼 카메라 핵심 필드가 부족해 보수적으로 판단해야 합니다.",
+          "?뷀꽣移댁슫?? 諛뺤뒪 援ъ꽦, ?뚯쫰 ?ы븿 ?щ?泥섎읆 移대찓???듭떖 ?꾨뱶媛 遺議깊빐 蹂댁닔?곸쑝濡??먮떒?댁빞 ?⑸땲??",
         );
       }
 
       addUnique(
         context.suggestedAdjustments,
-        "카메라는 정확한 모델명과 세대 표기, 바디/렌즈 포함 여부, 박스 구성 키워드를 검색어에 함께 넣어 다시 비교해보세요.",
+        "移대찓?쇰뒗 ?뺥솗??紐⑤뜽紐낃낵 ?몃? ?쒓린, 諛붾뵒/?뚯쫰 ?ы븿 ?щ?, 諛뺤뒪 援ъ꽦 ?ㅼ썙?쒕? 寃?됱뼱???④퍡 ?ｌ뼱 ?ㅼ떆 鍮꾧탳?대낫?몄슂.",
       );
       addUnique(
         context.bestMarketReasons,
-        `${MARKET_LABELS[context.bestMarket.sourceMarket]}은(는) 카메라 카테고리 기준으로 최근 거래량과 가격 프리미엄 균형이 가장 안정적입니다.`,
+        `${MARKET_LABELS_VALUE[context.bestMarket.sourceMarket]}?(?? 移대찓??移댄뀒怨좊━ 湲곗??쇰줈 理쒓렐 嫄곕옒?됯낵 媛寃??꾨━誘몄뾼 洹좏삎??媛???덉젙?곸엯?덈떎.`,
       );
       break;
     case "vintage_furniture":
       if (context.projection.expectedNetProfit >= 180000) {
         addUnique(
           context.recommendationReasons,
-          "빈티지 가구는 배송 부담이 크지만, 현재 예상 이익이면 물류 비용을 감안해도 방어 가능한 구간입니다.",
+          "鍮덊떚吏 媛援щ뒗 諛곗넚 遺?댁씠 ?ъ?留? ?꾩옱 ?덉긽 ?댁씡?대㈃ 臾쇰쪟 鍮꾩슜??媛먯븞?대룄 諛⑹뼱 媛?ν븳 援ш컙?낅땲??",
         );
       }
 
@@ -313,24 +314,24 @@ function applyPresetSpecificFeedback(
       ) {
         addUnique(
           context.blockerReasons,
-          "빈티지 가구는 회전이 느린 편이라 직거래/운송 부담까지 감안하면 자금 회수 기간이 길어질 수 있습니다.",
+          "鍮덊떚吏 媛援щ뒗 ?뚯쟾???먮┛ ?몄씠??吏곴굅???댁넚 遺?닿퉴吏 媛먯븞?섎㈃ ?먭툑 ?뚯닔 湲곌컙??湲몄뼱吏????덉뒿?덈떎.",
         );
       }
 
       if (context.categoryDiversity >= 3 || context.comparableCoverage < 0.5) {
         addUnique(
           context.blockerReasons,
-          "체어/테이블 등 다른 라인이 섞였을 가능성이 있어 동일 라인 비교군을 더 좁혀보는 편이 안전합니다.",
+          "泥댁뼱/?뚯씠釉????ㅻⅨ ?쇱씤???욎???媛?μ꽦???덉뼱 ?숈씪 ?쇱씤 鍮꾧탳援곗쓣 ??醫곹?蹂대뒗 ?몄씠 ?덉쟾?⑸땲??",
         );
       }
 
       addUnique(
         context.suggestedAdjustments,
-        "빈티지 가구는 브랜드명 외에 라인명, 우드 타입, 사이즈, 직거래/배송 조건을 검색어와 비용 계산에 함께 반영해보세요.",
+        "鍮덊떚吏 媛援щ뒗 釉뚮옖?쒕챸 ?몄뿉 ?쇱씤紐? ?곕뱶 ??? ?ъ씠利? 吏곴굅??諛곗넚 議곌굔??寃?됱뼱? 鍮꾩슜 怨꾩궛???④퍡 諛섏쁺?대낫?몄슂.",
       );
       addUnique(
         context.bestMarketReasons,
-        `${MARKET_LABELS[context.bestMarket.sourceMarket]}은(는) 가구 카테고리 기준으로 재고 압박이 상대적으로 낮고 가격 방어력이 낫습니다.`,
+        `${MARKET_LABELS_VALUE[context.bestMarket.sourceMarket]}?(?? 媛援?移댄뀒怨좊━ 湲곗??쇰줈 ?ш퀬 ?뺣컯???곷??곸쑝濡???퀬 媛寃?諛⑹뼱?μ씠 ?レ뒿?덈떎.`,
       );
       break;
     case "fashion":
@@ -338,24 +339,24 @@ function applyPresetSpecificFeedback(
       if (context.sizeDiversity <= 2 && context.comparableCoverage >= 0.5) {
         addUnique(
           context.recommendationReasons,
-          "패션 상품 기준으로 사이즈·시즌 혼입이 크지 않아 동일 상품 비교 정확도가 비교적 높습니다.",
+          "?⑥뀡 ?곹뭹 湲곗??쇰줈 ?ъ씠利댟룹떆利??쇱엯???ъ? ?딆븘 ?숈씪 ?곹뭹 鍮꾧탳 ?뺥솗?꾧? 鍮꾧탳???믪뒿?덈떎.",
         );
       }
 
       if (context.sizeDiversity >= 4) {
         addUnique(
           context.blockerReasons,
-          "같은 모델이라도 사이즈 스펙트럼이 넓어 실제 판매가가 크게 갈릴 수 있습니다.",
+          "媛숈? 紐⑤뜽?대씪???ъ씠利??ㅽ럺?몃읆???볦뼱 ?ㅼ젣 ?먮ℓ媛媛 ?ш쾶 媛덈┫ ???덉뒿?덈떎.",
         );
       }
 
       addUnique(
         context.suggestedAdjustments,
-        "패션 카테고리는 사이즈, 컬러, 시즌명을 검색어에 추가하면 동일 상품 매칭 정확도가 더 좋아집니다.",
+        "?⑥뀡 移댄뀒怨좊━???ъ씠利? 而щ윭, ?쒖쫵紐낆쓣 寃?됱뼱??異붽??섎㈃ ?숈씪 ?곹뭹 留ㅼ묶 ?뺥솗?꾧? ??醫뗭븘吏묐땲??",
       );
       addUnique(
         context.bestMarketReasons,
-        `${MARKET_LABELS[context.bestMarket.sourceMarket]}은(는) 패션 카테고리 기준으로 유동성과 평균 판매가의 균형이 좋습니다.`,
+        `${MARKET_LABELS_VALUE[context.bestMarket.sourceMarket]}?(?? ?⑥뀡 移댄뀒怨좊━ 湲곗??쇰줈 ?좊룞?깃낵 ?됯퇏 ?먮ℓ媛??洹좏삎??醫뗭뒿?덈떎.`,
       );
       break;
   }
@@ -650,119 +651,119 @@ export function calculateRecommendation(
   if (priceGapRate >= 0.16) {
     addUnique(
       recommendationReasons,
-      `한국 평균 시세가 일본 평균 시세보다 ${(priceGapRate * 100).toFixed(1)}% 높아 기본 가격 차익 여지가 있습니다.`,
+      `?쒓뎅 ?됯퇏 ?쒖꽭媛 ?쇰낯 ?됯퇏 ?쒖꽭蹂대떎 ${(priceGapRate * 100).toFixed(1)}% ?믪븘 湲곕낯 媛寃?李⑥씡 ?ъ?媛 ?덉뒿?덈떎.`,
     );
   }
 
   if (sold30d >= 3) {
     addUnique(
       recommendationReasons,
-      `최근 30일 판매완료 추정 ${sold30d}건, 판매중 ${activeCount}건으로 재고 압박은 ${inventoryPressure.toFixed(1)}배 수준입니다.`,
+      `理쒓렐 30???먮ℓ?꾨즺 異붿젙 ${sold30d}嫄? ?먮ℓ以?${activeCount}嫄댁쑝濡??ш퀬 ?뺣컯? ${inventoryPressure.toFixed(1)}諛??섏??낅땲??`,
     );
   }
 
   if (averageSellingDays !== null && averageSellingDays <= Math.round(preset.recommendation.slowSellingDays * 0.6)) {
     addUnique(
       recommendationReasons,
-      `판매완료 기준 추정 회전 기간 중앙값이 약 ${averageSellingDays}일로 비교적 빠른 편입니다.`,
+      `?먮ℓ?꾨즺 湲곗? 異붿젙 ?뚯쟾 湲곌컙 以묒븰媛믪씠 ??${averageSellingDays}?쇰줈 鍮꾧탳??鍮좊Ⅸ ?몄엯?덈떎.`,
     );
   }
 
   if (projection.expectedNetProfit >= preset.recommendation.minExpectedProfit) {
     addUnique(
       recommendationReasons,
-      `비용 반영 후 예상 순이익이 약 ${projection.expectedNetProfit.toLocaleString("ko-KR")}원이며 마진율은 ${(projection.expectedMarginRate * 100).toFixed(1)}%입니다.`,
+      `鍮꾩슜 諛섏쁺 ???덉긽 ?쒖씠?듭씠 ??${projection.expectedNetProfit.toLocaleString("ko-KR")}?먯씠硫?留덉쭊?⑥? ${(projection.expectedMarginRate * 100).toFixed(1)}%?낅땲??`,
     );
   }
 
   if (comparableCoverage >= Math.max(0.5, preset.recommendation.lowComparableCoverage + 0.05)) {
     addUnique(
       recommendationReasons,
-      `교차 마켓 비교군 커버리지가 ${(comparableCoverage * 100).toFixed(0)}%로 동일 상품 비교 신뢰도가 비교적 높습니다.`,
+      `援먯감 留덉폆 鍮꾧탳援?而ㅻ쾭由ъ?媛 ${(comparableCoverage * 100).toFixed(0)}%濡??숈씪 ?곹뭹 鍮꾧탳 ?좊ː?꾧? 鍮꾧탳???믪뒿?덈떎.`,
     );
   }
 
   if (platformPremiumRate >= 0.12) {
     addUnique(
       recommendationReasons,
-      `${MARKET_LABELS[bestMarket.sourceMarket]}에서 메루카리 대비 가격 프리미엄이 ${(platformPremiumRate * 100).toFixed(1)}% 수준으로 관측됩니다.`,
+      `${MARKET_LABELS_VALUE[bestMarket.sourceMarket]}?먯꽌 硫붾（移대━ ?鍮?媛寃??꾨━誘몄뾼??${(platformPremiumRate * 100).toFixed(1)}% ?섏??쇰줈 愿痢〓맗?덈떎.`,
     );
   }
 
   if (projection.expectedNetProfit <= 0) {
     addUnique(
       blockerReasons,
-      "현재 비용 구조에서는 예상 순이익이 음수라서 즉시 매입 판단은 보류하는 편이 안전합니다.",
+      "?꾩옱 鍮꾩슜 援ъ“?먯꽌???덉긽 ?쒖씠?듭씠 ?뚯닔?쇱꽌 利됱떆 留ㅼ엯 ?먮떒? 蹂대쪟?섎뒗 ?몄씠 ?덉쟾?⑸땲??",
     );
   }
 
   if (projection.expectedMarginRate < preset.recommendation.minMarginRate) {
     addUnique(
       blockerReasons,
-      `예상 마진율이 ${(preset.recommendation.minMarginRate * 100).toFixed(0)}% 목표에 못 미쳐 수수료나 배송비 변동에 취약합니다.`,
+      `?덉긽 留덉쭊?⑥씠 ${(preset.recommendation.minMarginRate * 100).toFixed(0)}% 紐⑺몴??紐?誘몄퀜 ?섏닔猷뚮굹 諛곗넚鍮?蹂?숈뿉 痍⑥빟?⑸땲??`,
     );
   }
 
   if (inventoryPressure >= preset.recommendation.highInventoryPressure && activeCount > 3) {
     addUnique(
       blockerReasons,
-      "판매중 재고가 최근 판매 흐름보다 많아 회전 속도 둔화 가능성이 있습니다.",
+      "?먮ℓ以??ш퀬媛 理쒓렐 ?먮ℓ ?먮쫫蹂대떎 留롮븘 ?뚯쟾 ?띾룄 ?뷀솕 媛?μ꽦???덉뒿?덈떎.",
     );
   }
 
   if (averageSellingDays !== null && averageSellingDays > preset.recommendation.slowSellingDays) {
     addUnique(
       blockerReasons,
-      `추정 회전 기간이 약 ${averageSellingDays}일로 길어 자금 회수 기간이 늘어질 수 있습니다.`,
+      `異붿젙 ?뚯쟾 湲곌컙????${averageSellingDays}?쇰줈 湲몄뼱 ?먭툑 ?뚯닔 湲곌컙???섏뼱吏????덉뒿?덈떎.`,
     );
   }
 
   if (averageRelevance < 0.62 || comparableCoverage < preset.recommendation.lowComparableCoverage) {
     addUnique(
       blockerReasons,
-      "검색 결과에 유사 모델이 섞여 있어 동일 상품 비교 정확도가 아직 충분하지 않습니다.",
+      "寃??寃곌낵???좎궗 紐⑤뜽???욎뿬 ?덉뼱 ?숈씪 ?곹뭹 鍮꾧탳 ?뺥솗?꾧? ?꾩쭅 異⑸텇?섏? ?딆뒿?덈떎.",
     );
   }
 
   if (uncertaintyPenalty >= 18) {
     addUnique(
       blockerReasons,
-      "날짜, 이미지, 핵심 속성 완성도가 충분하지 않아 현재 시세 해석은 보수적으로 보는 편이 좋습니다.",
+      "?좎쭨, ?대?吏, ?듭떖 ?띿꽦 ?꾩꽦?꾧? 異⑸텇?섏? ?딆븘 ?꾩옱 ?쒖꽭 ?댁꽍? 蹂댁닔?곸쑝濡?蹂대뒗 ?몄씠 醫뗭뒿?덈떎.",
     );
   }
 
   if (projection.expectedNetProfit < preset.recommendation.minExpectedProfit) {
     addUnique(
       suggestedAdjustments,
-      "환율, 국제 배송비, 플랫폼 수수료를 다시 입력해 목표 이익 기준을 보수적으로 재계산해보세요.",
+      "?섏쑉, 援?젣 諛곗넚鍮? ?뚮옯???섏닔猷뚮? ?ㅼ떆 ?낅젰??紐⑺몴 ?댁씡 湲곗???蹂댁닔?곸쑝濡??ш퀎?고빐蹂댁꽭??",
     );
   }
 
   if (averageRelevance < 0.7) {
     addUnique(
       suggestedAdjustments,
-      "검색어에 브랜드명, 모델명, 핵심 속성 키워드를 더 구체적으로 넣어 동일 상품 매칭 정확도를 높여보세요.",
+      "寃?됱뼱??釉뚮옖?쒕챸, 紐⑤뜽紐? ?듭떖 ?띿꽦 ?ㅼ썙?쒕? ??援ъ껜?곸쑝濡??ｌ뼱 ?숈씪 ?곹뭹 留ㅼ묶 ?뺥솗?꾨? ?믪뿬蹂댁꽭??",
     );
   }
 
   if (inventoryPressure > Math.max(1.4, preset.recommendation.highInventoryPressure - 0.4)) {
     addUnique(
       suggestedAdjustments,
-      "재고 압박이 큰 구간이라면 추천 매입가 이하의 저가 매물만 선별해 접근하는 편이 좋습니다.",
+      "?ш퀬 ?뺣컯????援ш컙?대씪硫?異붿쿇 留ㅼ엯媛 ?댄븯???媛 留ㅻЪ留??좊퀎???묎렐?섎뒗 ?몄씠 醫뗭뒿?덈떎.",
     );
   }
 
   if (sold30d < 2 || averageSellingDays === null) {
     addUnique(
       suggestedAdjustments,
-      "7일, 14일, 30일 판매완료 흐름을 더 길게 보고 단발 거래인지 반복 거래인지 확인해보세요.",
+      "7?? 14?? 30???먮ℓ?꾨즺 ?먮쫫????湲멸쾶 蹂닿퀬 ?⑤컻 嫄곕옒?몄? 諛섎났 嫄곕옒?몄? ?뺤씤?대낫?몄슂.",
     );
   }
 
   if (comparableCoverage < preset.recommendation.lowComparableCoverage) {
     addUnique(
       suggestedAdjustments,
-      "같은 브랜드 안에서도 세부 모델명이 다른 매물이 섞였을 수 있으니 모델명과 숫자 토큰을 더 좁혀 재검색해보세요.",
+      "媛숈? 釉뚮옖???덉뿉?쒕룄 ?몃? 紐⑤뜽紐낆씠 ?ㅻⅨ 留ㅻЪ???욎??????덉쑝??紐⑤뜽紐낃낵 ?レ옄 ?좏겙????醫곹? ?ш??됲빐蹂댁꽭??",
     );
   }
 
@@ -773,11 +774,11 @@ export function calculateRecommendation(
     alternativeKoreanMarkets.map((analysis) => analysis.marketMedianPrice).filter(Boolean),
   );
   const bestMarketReasons = [
-    `${MARKET_LABELS[bestMarket.sourceMarket]}의 중간값은 ${bestMarket.marketMedianPrice.toLocaleString("ko-KR")}원으로 현재 비교군에서 가장 안정적입니다.`,
-    `${MARKET_LABELS[bestMarket.sourceMarket]}의 최근 30일 판매완료 추정은 ${bestMarket.estimatedVolume30d}건이고 재고 압박은 ${platformInventoryPressure.toFixed(1)}배입니다.`,
+    `${MARKET_LABELS_VALUE[bestMarket.sourceMarket]}??以묎컙媛믪? ${bestMarket.marketMedianPrice.toLocaleString("ko-KR")}?먯쑝濡??꾩옱 鍮꾧탳援곗뿉??媛???덉젙?곸엯?덈떎.`,
+    `${MARKET_LABELS_VALUE[bestMarket.sourceMarket]}??理쒓렐 30???먮ℓ?꾨즺 異붿젙? ${bestMarket.estimatedVolume30d}嫄댁씠怨??ш퀬 ?뺣컯? ${platformInventoryPressure.toFixed(1)}諛곗엯?덈떎.`,
     alternativeMedian > 0
-      ? `${MARKET_LABELS[bestMarket.sourceMarket]}의 중간값이 다른 국내 마켓 평균보다 ${(bestMarket.marketMedianPrice - alternativeMedian).toLocaleString("ko-KR")}원 높습니다.`
-      : `${MARKET_LABELS[bestMarket.sourceMarket]}의 시장 활발도 점수는 ${bestMarket.liquidityScore}점입니다.`,
+      ? `${MARKET_LABELS_VALUE[bestMarket.sourceMarket]}??以묎컙媛믪씠 ?ㅻⅨ 援?궡 留덉폆 ?됯퇏蹂대떎 ${(bestMarket.marketMedianPrice - alternativeMedian).toLocaleString("ko-KR")}???믪뒿?덈떎.`
+      : `${MARKET_LABELS_VALUE[bestMarket.sourceMarket]}???쒖옣 ?쒕컻???먯닔??${bestMarket.liquidityScore}?먯엯?덈떎.`,
   ];
 
   applyPresetSpecificFeedback(preset.id, {
@@ -800,21 +801,21 @@ export function calculateRecommendation(
   if (recommendationReasons.length === 0) {
     addUnique(
       recommendationReasons,
-      "시장 차익과 거래 속도가 아주 강한 구간은 아니어서 보수적으로 접근하는 편이 좋습니다.",
+      "?쒖옣 李⑥씡怨?嫄곕옒 ?띾룄媛 ?꾩＜ 媛뺥븳 援ш컙? ?꾨땲?댁꽌 蹂댁닔?곸쑝濡??묎렐?섎뒗 ?몄씠 醫뗭뒿?덈떎.",
     );
   }
 
   if (blockerReasons.length === 0 && recommendationScore >= 70) {
     addUnique(
       blockerReasons,
-      "큰 리스크는 적지만 실제 매입 전에는 실물 상태와 구성품, 사이즈/세대 차이를 다시 확인하는 것이 안전합니다.",
+      "??由ъ뒪?щ뒗 ?곸?留??ㅼ젣 留ㅼ엯 ?꾩뿉???ㅻЪ ?곹깭? 援ъ꽦?? ?ъ씠利??몃? 李⑥씠瑜??ㅼ떆 ?뺤씤?섎뒗 寃껋씠 ?덉쟾?⑸땲??",
     );
   }
 
   if (suggestedAdjustments.length === 0) {
     addUnique(
       suggestedAdjustments,
-      "현재 조건에서는 추천 매입가 이하 매물만 엄격하게 선별하는 전략이 가장 현실적입니다.",
+      "?꾩옱 議곌굔?먯꽌??異붿쿇 留ㅼ엯媛 ?댄븯 留ㅻЪ留??꾧꺽?섍쾶 ?좊퀎?섎뒗 ?꾨왂??媛???꾩떎?곸엯?덈떎.",
     );
   }
 
@@ -890,3 +891,4 @@ export function pickRecommendedListings(
     })
     .slice(0, 6);
 }
+

@@ -9,7 +9,8 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "benchmark": "node scripts/run-search-benchmark.mjs",
-    "benchmark:assert": "node scripts/run-search-benchmark.mjs --assert=true"
+    "benchmark:assert": "node scripts/run-search-benchmark.mjs --assert=true",
+    "smoke:mercari": "node --experimental-strip-types --loader ./scripts/alias-loader.mjs ./scripts/mercari-live-smoke.ts"
   },
   "dependencies": {
     "next": "^15.2.0",

@@ -1,4 +1,4 @@
-import { MockMarketListing } from "@/lib/types/market";
+﻿import type { MockMarketListing } from "@/lib/types/market";
 
 export const FRUITSFAMILY_MOCK_LISTINGS: MockMarketListing[] = [
   {
@@ -172,7 +172,7 @@ export const FRUITSFAMILY_MOCK_LISTINGS: MockMarketListing[] = [
     id: "fruits-noise-1",
     sourceMarket: "fruitsfamily",
     listingType: "active",
-    title: "슈프림 교환 문의",
+    title: "?덊봽由?援먰솚 臾몄쓽",
     price: 10000,
     currency: "KRW",
     imageUrl: "https://picsum.photos/seed/fruits-noise-1/480/480",
@@ -182,6 +182,7 @@ export const FRUITSFAMILY_MOCK_LISTINGS: MockMarketListing[] = [
     model: "Box Logo Hoodie",
     category: "hoodie",
     normalizedName: "supreme box logo hoodie",
-    relatedKeywords: ["교환", "문의"],
+    relatedKeywords: ["援먰솚", "臾몄쓽"],
   },
 ];
+

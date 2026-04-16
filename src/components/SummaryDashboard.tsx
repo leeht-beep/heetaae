@@ -1,6 +1,5 @@
-import { marketLabel } from "@/lib/utils/format";
-import { formatCurrency, formatPercent } from "@/lib/utils/format";
-import {
+import { formatCurrency, formatPercent, marketLabel } from "@/lib/utils/format";
+import type {
   DashboardSummary,
   ProfitProjection,
   RecommendationResult,
@@ -26,7 +25,7 @@ export function SummaryDashboard({
     {
       label: "한국 평균가",
       value: formatCurrency(dashboard.koreaAveragePrice, "KRW"),
-      subValue: `추천 판매처 ${marketLabel(dashboard.recommendedSellMarket)}`,
+      subValue: `추천 판매 마켓 ${marketLabel(dashboard.recommendedSellMarket)}`,
     },
     {
       label: "예상 순이익",
@@ -56,7 +55,7 @@ export function SummaryDashboard({
     {
       label: "최적 판매처",
       value: marketLabel(recommendation.bestResaleMarket),
-      subValue: "판매완료와 유동성 기준",
+      subValue: "판매완료 데이터와 유동성 기준",
     },
   ];
 
@@ -64,22 +63,22 @@ export function SummaryDashboard({
     {
       label: "추천 사유",
       items: recommendation.recommendationReasons,
-      emptyText: "실제 수집 데이터가 붙으면 추천 근거가 더 구체적으로 표시됩니다.",
+      emptyText: "데이터가 충분해지면 추천 근거가 더 구체적으로 표시됩니다.",
     },
     {
       label: "주의 요소",
       items: recommendation.blockerReasons,
-      emptyText: "현재 조건에서는 큰 blocker가 보이지 않습니다.",
+      emptyText: "현재 기준에서는 치명적인 blocker가 보이지 않습니다.",
     },
     {
       label: "조정 제안",
       items: recommendation.suggestedAdjustments,
-      emptyText: "현재 비용 설정으로 먼저 테스트해도 괜찮습니다.",
+      emptyText: "비용 설정을 먼저 조정해 보면서 테스트해보세요.",
     },
     {
       label: "판매처 추천 근거",
       items: recommendation.bestMarketReasons,
-      emptyText: "데이터가 더 쌓이면 판매처 추천 근거가 더 선명해집니다.",
+      emptyText: "비교 데이터가 늘어나면 판매처 추천 근거도 더 선명해집니다.",
     },
   ];
 
@@ -140,13 +139,13 @@ export function SummaryDashboard({
                   </strong>
                 </div>
                 <div className="flex items-center justify-between gap-3">
-                  <span>부대비용 합계</span>
+                  <span>추가 비용 합계</span>
                   <strong className="text-ink">
                     {formatCurrency(projection.totalAdditionalCosts, "KRW")}
                   </strong>
                 </div>
                 <div className="flex items-center justify-between gap-3">
-                  <span>수수료 차감 후 실수령</span>
+                  <span>수수료 차감 후 수령액</span>
                   <strong className="text-ink">
                     {formatCurrency(projection.netSellProceeds, "KRW")}
                   </strong>
@@ -155,7 +154,7 @@ export function SummaryDashboard({
             </div>
 
             <div className="rounded-[1.35rem] border border-line bg-gradient-to-br from-teal/10 via-white/70 to-coral/10 p-4">
-              <p className="text-sm font-semibold text-ink">핵심 판단값</p>
+              <p className="text-sm font-semibold text-ink">도달 기준값</p>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <div className="rounded-2xl bg-white/80 p-3">
                   <p className="text-xs uppercase tracking-[0.15em] text-muted">추천 매입가</p>

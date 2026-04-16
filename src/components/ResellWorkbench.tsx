@@ -12,11 +12,7 @@ import {
   MARKET_THEME,
   QUICK_SEARCHES,
 } from "@/lib/constants";
-import {
-  getSearchCategoryPreset,
-  listSearchCategoryPresets,
-} from "@/lib/search/presets";
-import {
+import type {
   CategoryPresetId,
   CostSettings,
   MarketListing,
@@ -39,13 +35,12 @@ interface ResellWorkbenchProps {
   initialData: SearchResponse;
 }
 
-const SEARCH_PRESET_OPTIONS = [
-  { id: "auto" as const, label: "자동 감지" },
-  ...listSearchCategoryPresets().map((preset) => ({
-    id: preset.id,
-    label: preset.label,
-  })),
-];
+const PRESET_LABELS: Record<SearchPresetOption, string> = {
+  auto: "자동 감지",
+  fashion: "패션",
+  camera: "카메라",
+  vintage_furniture: "빈티지 가구",
+};
 
 function statusTone(status: ProviderExecutionStatus): string {
   switch (status) {
@@ -55,11 +50,6 @@ function statusTone(status: ProviderExecutionStatus): string {
       return "border-line bg-white/80 text-muted";
     case "partial":
       return "border-amber-200 bg-amber-50 text-amber-700";
-    case "timeout":
-    case "blocked":
-    case "parse_error":
-    case "parsing_failure":
-    case "error":
     default:
       return "border-coral/20 bg-coral/10 text-coral";
   }
@@ -108,6 +98,7 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
       platformFeeRate: String(nextCosts.platformFeeRate),
       targetMarginRate: String(nextCosts.targetMarginRate),
     });
+
     if (nextPreset !== "auto") {
       params.set("preset", nextPreset);
     }
@@ -155,6 +146,7 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
     : undefined;
   const comparableListings =
     currentComparableGroup?.listings.filter((item) => item.id !== selectedListing?.id) ?? [];
+  const currentPresetLabel = PRESET_LABELS[data.queryPlan.presetId] ?? data.queryPlan.presetId;
 
   return (
     <>
@@ -163,16 +155,16 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
           <div className="grid gap-8 px-5 py-6 sm:px-6 lg:grid-cols-[1.15fr_0.85fr] lg:px-8 lg:py-8">
             <div>
               <div className="inline-flex rounded-full border border-line bg-white/85 px-4 py-2 text-sm font-semibold text-muted">
-                메루카리 일본 매입가 대비 한국 리셀 판단 도구
+                Mercari 일본 매입가 대비 한국 리셀 판단 도구
               </div>
               <h1 className="mt-5 max-w-3xl font-[var(--font-display)] text-4xl font-bold leading-tight text-ink sm:text-5xl">
                 일본에서 사고 한국에서 팔기 전에
                 <br />
-                빠르게 판단하는 반응형 리셀 분석 웹서비스
+                빠르게 판단하는 반응형 리셀 분석 서비스
               </h1>
               <p className="mt-4 max-w-2xl text-base leading-7 text-muted sm:text-lg">
-                검색 한 번으로 메루카리, 번개장터, FruitsFamily 결과를 함께 비교하고 판매중,
-                판매완료, 추천 매물, 예상 순이익과 추천 매입가까지 한 화면에서 확인합니다.
+                검색어 하나로 Mercari, 번개장터, FruitsFamily 결과를 함께 비교하고 판매중,
+                판매완료, 추천 매물, 예상 수익과 추천 매입가까지 한 화면에서 확인합니다.
               </p>
 
               <form
@@ -195,9 +187,9 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
                     setSelectedPreset(event.target.value as SearchPresetOption)
                   }
                 >
-                  {SEARCH_PRESET_OPTIONS.map((preset) => (
-                    <option key={preset.id} value={preset.id}>
-                      {preset.label}
+                  {(Object.keys(PRESET_LABELS) as SearchPresetOption[]).map((presetId) => (
+                    <option key={presetId} value={presetId}>
+                      {PRESET_LABELS[presetId]}
                     </option>
                   ))}
                 </select>
@@ -230,17 +222,17 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
 
               {data.hasPartialFailures ? (
                 <div className="mt-4 rounded-[1.2rem] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                  일부 마켓 수집이 완전하지 않았지만 나머지 결과는 계속 표시합니다.
+                  일부 마켓 수집이 완전하지 않지만 나머지 결과는 계속 표시합니다.
                   {failingMarkets.length > 0
-                    ? ` 문제가 있었던 마켓: ${failingMarkets.map((item) => marketLabel(item.sourceMarket)).join(", ")}`
+                    ? ` 문제 마켓: ${failingMarkets.map((item) => marketLabel(item.sourceMarket)).join(", ")}`
                     : ""}
                 </div>
               ) : null}
 
               {!data.hasAnySuccessfulMarket ? (
                 <div className="mt-4 rounded-[1.2rem] border border-coral/20 bg-coral/10 px-4 py-3 text-sm text-coral">
-                  현재 검색에서는 정상적으로 수집된 마켓이 없습니다. 잠시 후 다시 시도하거나 Mock 모드로
-                  확인해 주세요.
+                  현재 검색에서는 정상적으로 수집된 마켓이 없습니다. 다시 시도하거나 Mock 모드로
+                  확인해보세요.
                 </div>
               ) : null}
 
@@ -274,7 +266,7 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
                         .join(", ")}`
                     : ""}
                   {data.alternativeQueries.length > 0
-                    ? " 아래 대안 검색어로 브랜드만, 모델명만, 또는 핵심 토큰만 다시 검색해보는 것을 권장합니다."
+                    ? " 브랜드만, 모델명만, 핵심 토큰만 다시 검색해보는 것을 권장합니다."
                     : ""}
                 </div>
               ) : null}
@@ -287,11 +279,12 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
                   {data.searchTerm}
                 </p>
                 <p className="mt-2 text-sm text-muted">
-                  preset {getSearchCategoryPreset(data.queryPlan.presetId).label} ·{" "}
-                  {data.queryPlan.presetSource === "user" ? "수동 선택" : "자동 감지"}
+                  preset {currentPresetLabel} /{" "}
+                  {data.queryPlan.presetSource === "user" ? "사용자 선택" : "자동 감지"}
                 </p>
                 <p className="mt-2 text-sm text-muted">
-                  정규화된 매물 {data.listings.length}건 / 추천 매입 후보 {data.recommendedListings.length}건
+                  정규화 매물 {data.listings.length}건 / 추천 매입 후보 {data.recommendedListings.length}
+                  건
                 </p>
               </article>
 
@@ -311,7 +304,7 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
                   {providerModeLabel(data.providerMode)}
                 </p>
                 <p className="mt-2 text-sm text-muted">
-                  mock / real collector를 같은 contract로 교체할 수 있도록 분리되어 있습니다.
+                  mock / real collector를 같은 contract로 교체할 수 있도록 분리했습니다.
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2">
                   {data.marketResults.map((result) => (
@@ -319,7 +312,8 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
                       key={result.sourceMarket}
                       className={`inline-flex rounded-full border px-3 py-1 text-sm font-semibold ${statusTone(result.status)}`}
                     >
-                      {marketLabel(result.sourceMarket)} · {providerStatusLabel(result.status)} · {providerModeLabel(result.mode)}
+                      {marketLabel(result.sourceMarket)} · {providerStatusLabel(result.status)} ·{" "}
+                      {providerModeLabel(result.mode)}
                     </span>
                   ))}
                 </div>
@@ -344,7 +338,7 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
                 </h2>
               </div>
               <p className="text-sm text-muted">
-                빈 결과, 부분 성공, 실패를 개별 마켓 단위로 분리해 UI가 깨지지 않도록 처리합니다.
+                빈 결과, 부분 성공, 실패를 마켓 단위로 분리해 UI 전체가 깨지지 않도록 처리합니다.
               </p>
             </div>
 
@@ -380,7 +374,7 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
                       </strong>
                     </div>
                     <div className="flex items-center justify-between gap-3">
-                      <span>건너뜀</span>
+                      <span>제외 수</span>
                       <strong className="text-ink">{result.skippedItemCount}</strong>
                     </div>
                     <div className="flex items-center justify-between gap-3">
@@ -419,16 +413,13 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
                     normalized query: <strong className="text-ink">{data.queryPlan.normalized}</strong>
                   </p>
                   <p className="mt-1">
-                    preset:{" "}
-                    <strong className="text-ink">
-                      {getSearchCategoryPreset(data.queryPlan.presetId).label}
-                    </strong>
-                    {" / "}
-                    source: <strong className="text-ink">{data.queryPlan.presetSource}</strong>
+                    preset: <strong className="text-ink">{currentPresetLabel}</strong> / source:{" "}
+                    <strong className="text-ink">{data.queryPlan.presetSource}</strong>
                   </p>
                   <p className="mt-1">
-                    cache: <strong className="text-ink">{data.debug.cacheHit ? "hit" : "miss"}</strong> / duration:{" "}
-                    <strong className="text-ink">{data.debug.totalDurationMs}ms</strong>
+                    cache:{" "}
+                    <strong className="text-ink">{data.debug.cacheHit ? "hit" : "miss"}</strong> /
+                    duration: <strong className="text-ink">{data.debug.totalDurationMs}ms</strong>
                   </p>
                   <p className="mt-1">
                     alias matches:{" "}
@@ -452,19 +443,28 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
                 </div>
                 <div className="grid gap-4 xl:grid-cols-3">
                   {data.debug.providerDebug.map((provider) => (
-                    <div key={provider.market} className="rounded-2xl border border-line bg-white/80 p-4">
+                    <div
+                      key={provider.market}
+                      className="rounded-2xl border border-line bg-white/80 p-4"
+                    >
                       <p className="font-semibold text-ink">{marketLabel(provider.market)}</p>
                       <p className="mt-1 text-xs">
-                        fallback {provider.fallbackUsed ? "used" : "not used"} / cache {provider.cacheHit ? "hit" : "miss"}
+                        fallback {provider.fallbackUsed ? "used" : "not used"} / cache{" "}
+                        {provider.cacheHit ? "hit" : "miss"}
                       </p>
                       <div className="mt-3 space-y-2">
                         {provider.attemptedQueries.map((attempt) => (
-                          <div key={`${provider.market}-${attempt.variantKey}-${attempt.query}`} className="rounded-xl bg-mist px-3 py-2">
+                          <div
+                            key={`${provider.market}-${attempt.variantKey}-${attempt.query}`}
+                            className="rounded-xl bg-mist px-3 py-2"
+                          >
                             <p className="font-medium text-ink">
                               {attempt.variantLabel}: {attempt.query}
                             </p>
                             <p className="mt-1 text-xs">
-                              {providerStatusLabel(attempt.status)} / raw {attempt.rawResultCount} / normalized {attempt.normalizedResultCount ?? 0} / filtered {attempt.filteredOutCount ?? 0}
+                              {providerStatusLabel(attempt.status)} / raw {attempt.rawResultCount} /
+                              normalized {attempt.normalizedResultCount ?? 0} / filtered{" "}
+                              {attempt.filteredOutCount ?? 0}
                             </p>
                           </div>
                         ))}
@@ -485,7 +485,7 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
                   <div>
                     <p className="section-title">유사 상품 묶음</p>
                     <h2 className="mt-2 font-[var(--font-display)] text-2xl font-bold text-ink">
-                      유사 상품 묶음 비교
+                      유사 상품 그룹 비교
                     </h2>
                   </div>
                   <p className="text-sm text-muted">

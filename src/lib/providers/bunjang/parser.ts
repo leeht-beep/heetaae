@@ -1,4 +1,4 @@
-import { BunjangRawListing } from "@/lib/fixtures/types";
+﻿import type { BunjangRawListing } from "@/lib/fixtures/types";
 import { DropReasonSummary } from "@/lib/types/market";
 import { tokenize } from "@/lib/utils/normalize";
 import {
@@ -571,3 +571,4 @@ export function buildBunjangSearchApiUrl(query: string, requestedCount: number):
 
   return url.toString();
 }
+

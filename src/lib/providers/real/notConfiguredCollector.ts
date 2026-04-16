@@ -1,5 +1,6 @@
-import { buildCollectorEnvelope, RawMarketCollector } from "@/lib/providers/base";
+﻿import type { buildCollectorEnvelope, RawMarketCollector } from "@/lib/providers/base";
 import { MarketId } from "@/lib/types/market";
+import { buildCollectorEnvelope as buildCollectorEnvelopeValue } from "@/lib/providers/base";
 
 export function createNotConfiguredCollector<
   TRawItem,
@@ -14,7 +15,7 @@ export function createNotConfiguredCollector<
     label: options.label,
     mode: "real",
     async collect(context) {
-      return buildCollectorEnvelope<TRawItem, TMeta>({
+      return buildCollectorEnvelopeValue<TRawItem, TMeta>({
         market: options.id,
         label: options.label,
         mode: "real",
@@ -22,10 +23,10 @@ export function createNotConfiguredCollector<
         status: "error",
         rawItems: [],
         meta: (options.meta ?? { configured: false }) as TMeta,
-        warnings: ["실제 수집기는 아직 연결되지 않았습니다."],
+        warnings: ["?ㅼ젣 ?섏쭛湲곕뒗 ?꾩쭅 ?곌껐?섏? ?딆븯?듬땲??"],
         error: {
           type: "not_configured",
-          message: `${options.label} 실수집기는 아직 연결되지 않았습니다.`,
+          message: `${options.label} ?ㅼ닔吏묎린???꾩쭅 ?곌껐?섏? ?딆븯?듬땲??`,
           retryable: false,
         },
         durationMs: 0,
@@ -33,3 +34,4 @@ export function createNotConfiguredCollector<
     },
   };
 }
+

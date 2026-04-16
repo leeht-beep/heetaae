@@ -1,5 +1,6 @@
-import { DEFAULT_MIN_RELEVANCE } from "@/lib/constants";
+﻿import type { DEFAULT_MIN_RELEVANCE } from "@/lib/constants";
 import { getConfiguredProviderMode, resolveProviderMode } from "@/lib/config/provider-mode";
+import { DEFAULT_MIN_RELEVANCE as DEFAULT_MIN_RELEVANCE_VALUE } from "@/lib/constants";
 import { marketDataSources } from "@/lib/providers";
 import { runMarketDataSource } from "@/lib/providers/base";
 import { stripMockScenarioTokens } from "@/lib/providers/mock/scenario";
@@ -435,7 +436,7 @@ export async function searchResellOpportunities(
   const limit = options.limit ?? 24;
   const preset = getSearchCategoryPreset(queryPlan.presetId);
   const minRelevanceScore =
-    options.minRelevanceScore ?? Math.max(DEFAULT_MIN_RELEVANCE, preset.id === "camera" ? 0.38 : preset.id === "vintage_furniture" ? 0.35 : DEFAULT_MIN_RELEVANCE);
+    options.minRelevanceScore ?? Math.max(DEFAULT_MIN_RELEVANCE_VALUE, preset.id === "camera" ? 0.38 : preset.id === "vintage_furniture" ? 0.35 : DEFAULT_MIN_RELEVANCE_VALUE);
   const cacheKey = buildSearchCacheKey(
     queryPlan,
     costs,
@@ -485,3 +486,4 @@ export async function searchResellOpportunities(
   setCachedSearchResponse(cacheKey, response);
   return response;
 }
+

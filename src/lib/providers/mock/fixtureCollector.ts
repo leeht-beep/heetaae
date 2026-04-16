@@ -1,8 +1,9 @@
-import {
+﻿import type {
   buildCollectorEnvelope,
   RawMarketCollector,
   ResolvedSearchProviderContext,
 } from "@/lib/providers/base";
+import { buildCollectorEnvelope as buildCollectorEnvelopeValue } from "@/lib/providers/base";
 import { MarketId, ProviderExecutionStatus, ProviderMode } from "@/lib/types/market";
 import { resolveMockScenario, stripMockScenarioTokens } from "@/lib/providers/mock/scenario";
 
@@ -69,7 +70,7 @@ export function createFixtureCollector<
         warnings.push(`${options.label} parsing fixture scenario injected malformed rows only.`);
       }
 
-      return buildCollectorEnvelope<TRawItem, TMeta>({
+      return buildCollectorEnvelopeValue<TRawItem, TMeta>({
         market: options.id,
         label: options.label,
         mode: "mock",
@@ -83,3 +84,4 @@ export function createFixtureCollector<
     },
   };
 }
+

@@ -1,6 +1,6 @@
 "use client";
 
-import { CostSettings } from "@/lib/types/market";
+import type { CostSettings } from "@/lib/types/market";
 import { formatCurrency } from "@/lib/utils/format";
 
 interface CostSettingsPanelProps {
@@ -24,7 +24,7 @@ export function CostSettingsPanel({
       costs.extraCosts,
   );
 
-  const setNumber = (
+  const updateNumber = (
     key: keyof CostSettings,
     value: string,
     options?: { percent?: boolean },
@@ -43,7 +43,7 @@ export function CostSettingsPanel({
       <div className="border-b border-line px-5 py-5 sm:px-6">
         <p className="section-title">비용 설정</p>
         <h2 className="mt-2 font-[var(--font-display)] text-2xl font-bold text-ink">
-          추천 매입가 계산 설정
+          추천 매입가 계산
         </h2>
         <p className="mt-2 text-sm leading-6 text-muted">
           일본 내 배송비는 JPY 기준, 국제 배송비와 기타 비용은 KRW 기준으로 입력합니다.
@@ -59,7 +59,7 @@ export function CostSettingsPanel({
               type="number"
               step="0.01"
               value={costs.exchangeRate}
-              onChange={(event) => setNumber("exchangeRate", event.target.value)}
+              onChange={(event) => updateNumber("exchangeRate", event.target.value)}
             />
           </label>
 
@@ -72,7 +72,9 @@ export function CostSettingsPanel({
               type="number"
               step="100"
               value={costs.japanDomesticShipping}
-              onChange={(event) => setNumber("japanDomesticShipping", event.target.value)}
+              onChange={(event) =>
+                updateNumber("japanDomesticShipping", event.target.value)
+              }
             />
           </label>
 
@@ -85,7 +87,9 @@ export function CostSettingsPanel({
               type="number"
               step="1000"
               value={costs.internationalShipping}
-              onChange={(event) => setNumber("internationalShipping", event.target.value)}
+              onChange={(event) =>
+                updateNumber("internationalShipping", event.target.value)
+              }
             />
           </label>
 
@@ -96,7 +100,7 @@ export function CostSettingsPanel({
               type="number"
               step="1000"
               value={costs.extraCosts}
-              onChange={(event) => setNumber("extraCosts", event.target.value)}
+              onChange={(event) => updateNumber("extraCosts", event.target.value)}
             />
           </label>
 
@@ -108,7 +112,7 @@ export function CostSettingsPanel({
               step="0.1"
               value={costs.platformFeeRate * 100}
               onChange={(event) =>
-                setNumber("platformFeeRate", event.target.value, { percent: true })
+                updateNumber("platformFeeRate", event.target.value, { percent: true })
               }
             />
           </label>
@@ -121,14 +125,14 @@ export function CostSettingsPanel({
               step="0.1"
               value={costs.targetMarginRate * 100}
               onChange={(event) =>
-                setNumber("targetMarginRate", event.target.value, { percent: true })
+                updateNumber("targetMarginRate", event.target.value, { percent: true })
               }
             />
           </label>
         </div>
 
         <div className="rounded-[1.35rem] border border-line bg-gradient-to-br from-mist via-white to-sand p-4">
-          <p className="text-sm font-semibold text-ink">부대비용 요약</p>
+          <p className="text-sm font-semibold text-ink">추가 비용 합계</p>
           <p className="mt-3 font-[var(--font-display)] text-2xl font-bold text-ink">
             {formatCurrency(totalAdditionalCosts, "KRW")}
           </p>
@@ -144,7 +148,7 @@ export function CostSettingsPanel({
             disabled={pending}
             onClick={onSubmit}
           >
-            {pending ? "재계산 중..." : "이 비용으로 재계산"}
+            {pending ? "계산 중..." : "이 비용으로 다시 계산"}
           </button>
           <button
             className="soft-button border border-line bg-white/80 text-ink"

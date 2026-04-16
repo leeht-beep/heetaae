@@ -1,4 +1,4 @@
-import { ProviderMode } from "@/lib/types/market";
+﻿import type { ProviderMode } from "@/lib/types/market";
 
 const DEFAULT_PROVIDER_MODE: ProviderMode = "real";
 
@@ -15,3 +15,4 @@ export function getConfiguredProviderMode(): ProviderMode {
     process.env.MARKET_PROVIDER_MODE ?? process.env.NEXT_PUBLIC_MARKET_PROVIDER_MODE ?? null,
   );
 }
+

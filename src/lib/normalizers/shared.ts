@@ -1,4 +1,4 @@
-import {
+﻿import type {
   CurrencyCode,
   DropReasonSummary,
   ListingType,
@@ -570,3 +570,4 @@ export function normalizeRawItems<TRawItem>(
     error: buildNormalizationError(status, warnings),
   };
 }
+

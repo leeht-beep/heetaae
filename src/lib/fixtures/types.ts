@@ -1,4 +1,4 @@
-import { CurrencyCode } from "@/lib/types/market";
+import type { CurrencyCode } from "@/lib/types/market";
 
 export interface FixtureResponseMeta extends Record<string, unknown> {
   fixtureId: string;

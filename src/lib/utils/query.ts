@@ -1,4 +1,4 @@
-import {
+import type {
   AliasLanguage,
   CategoryPresetId,
   MarketId,
@@ -10,12 +10,12 @@ import {
   BRAND_ALIAS_DICTIONARY,
   CATEGORY_ALIAS_DICTIONARY,
   MODEL_ALIAS_DICTIONARY,
-  AliasDictionaryEntry,
   findAliasEntryByCanonical,
   findBestAliasMatch,
   getLocalizedAliasCandidates,
   getPreferredLanguagesForMarket,
 } from "@/lib/search/alias-dictionary";
+import type { AliasDictionaryEntry } from "@/lib/search/alias-dictionary";
 import {
   getPresetStrategyRank,
   getSearchCategoryPreset,

@@ -1,5 +1,5 @@
 import { MARKET_LABELS } from "@/lib/constants";
-import {
+import type {
   CurrencyCode,
   ListingType,
   MarketId,
@@ -26,10 +26,16 @@ export function formatDate(value?: string): string {
     return "-";
   }
 
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "-";
+  }
+
   return new Intl.DateTimeFormat("ko-KR", {
     month: "short",
     day: "numeric",
-  }).format(new Date(value));
+  }).format(date);
 }
 
 export function formatTrend(direction: TrendDirection, percentage: number): string {
@@ -52,9 +58,9 @@ export function providerModeLabel(mode: ProviderMode): string {
 export function providerStatusLabel(status: ProviderExecutionStatus): string {
   switch (status) {
     case "success":
-      return "정상";
+      return "성공";
     case "empty":
-      return "빈 결과";
+      return "결과 없음";
     case "partial":
       return "부분 성공";
     case "timeout":

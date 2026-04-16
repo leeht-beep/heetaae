@@ -1,4 +1,4 @@
-import { BunjangRawListing } from "@/lib/fixtures/types";
+﻿import type { BunjangRawListing } from "@/lib/fixtures/types";
 import {
   buildCollectorEnvelope,
   createProviderError,
@@ -161,7 +161,7 @@ function annotateItems(
 
 export const bunjangRealCollector: RawMarketCollector<BunjangRawListing, BunjangCollectorMeta> = {
   id: "bunjang",
-  label: "번개장터",
+  label: "踰덇컻?ν꽣",
   mode: "real",
   defaultTimeoutMs: 12000,
   async collect(context) {
@@ -355,7 +355,7 @@ export const bunjangRealCollector: RawMarketCollector<BunjangRawListing, Bunjang
 
       return buildCollectorEnvelope<BunjangRawListing, BunjangCollectorMeta>({
         market: "bunjang",
-        label: "번개장터",
+        label: "踰덇컻?ν꽣",
         mode: "real",
         query: context.queryPlan.normalized || context.query,
         status,
@@ -408,3 +408,4 @@ export const bunjangRealCollector: RawMarketCollector<BunjangRawListing, Bunjang
     };
   },
 };
+

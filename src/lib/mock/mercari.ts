@@ -1,4 +1,4 @@
-import { MockMarketListing } from "@/lib/types/market";
+﻿import type { MockMarketListing } from "@/lib/types/market";
 
 export const MERCARI_MOCK_LISTINGS: MockMarketListing[] = [
   {
@@ -190,7 +190,7 @@ export const MERCARI_MOCK_LISTINGS: MockMarketListing[] = [
     id: "mercari-noise-1",
     sourceMarket: "mercari",
     listingType: "active",
-    title: "Supreme 박스로고 삽니다 구매희망",
+    title: "Supreme 諛뺤뒪濡쒓퀬 ?쎈땲??援щℓ?щ쭩",
     price: 1000,
     currency: "JPY",
     imageUrl: "https://picsum.photos/seed/mercari-noise-1/480/480",
@@ -203,3 +203,4 @@ export const MERCARI_MOCK_LISTINGS: MockMarketListing[] = [
     relatedKeywords: ["wanted", "buy"],
   },
 ];
+

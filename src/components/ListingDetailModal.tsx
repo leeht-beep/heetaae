@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import Image from "next/image";
 import { MARKET_THEME } from "@/lib/constants";
-import {
+import type {
   MarketListing,
   MarketId,
   ProfitProjection,
@@ -134,7 +134,7 @@ export function ListingDetailModal({
               <h4 className="mt-4 text-2xl font-bold text-ink">{listing.title}</h4>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <div className="rounded-2xl bg-mist p-3">
-                  <p className="text-xs uppercase tracking-[0.15em] text-muted">가격</p>
+                  <p className="text-xs uppercase tracking-[0.15em] text-muted">Price</p>
                   <p className="mt-2 font-semibold text-ink">
                     {formatCurrency(listing.price, listing.currency)}
                   </p>
@@ -143,7 +143,7 @@ export function ListingDetailModal({
                   </p>
                 </div>
                 <div className="rounded-2xl bg-mist p-3">
-                  <p className="text-xs uppercase tracking-[0.15em] text-muted">등록 / 판매일</p>
+                  <p className="text-xs uppercase tracking-[0.15em] text-muted">Dates</p>
                   <p className="mt-2 text-sm font-semibold text-ink">
                     등록 {formatDate(listing.listedAt)}
                   </p>
@@ -153,16 +153,16 @@ export function ListingDetailModal({
 
               {isRecommended ? (
                 <div className="mt-4 rounded-[1.2rem] bg-gradient-to-br from-teal/10 via-white to-coral/10 p-4">
-                  <p className="text-sm font-semibold text-ink">추천 매입 후보</p>
+                  <p className="text-sm font-semibold text-ink">추천 매입 판단</p>
                   <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <div>
-                      <p className="text-xs uppercase tracking-[0.15em] text-muted">예상 순이익</p>
+                      <p className="text-xs uppercase tracking-[0.15em] text-muted">순이익</p>
                       <p className="mt-2 font-semibold text-ink">
                         {formatCurrency(listing.estimatedProfit, "KRW")}
                       </p>
                     </div>
                     <div>
-                      <p className="text-xs uppercase tracking-[0.15em] text-muted">예상 마진율</p>
+                      <p className="text-xs uppercase tracking-[0.15em] text-muted">마진율</p>
                       <p className="mt-2 font-semibold text-ink">
                         {formatPercent(listing.estimatedMarginRate)}
                       </p>
@@ -222,7 +222,7 @@ export function ListingDetailModal({
                   </strong>
                 </div>
                 <div className="flex items-center justify-between gap-3 rounded-2xl bg-mist px-3 py-3">
-                  <span className="text-muted">추천 판매처</span>
+                  <span className="text-muted">추천 판매 마켓</span>
                   <strong className="text-ink">
                     {marketLabel(projection.bestResaleMarket)}
                   </strong>
@@ -235,12 +235,12 @@ export function ListingDetailModal({
               <div className="mt-4 space-y-3">
                 {comparableListings.length === 0 ? (
                   <div className="rounded-2xl bg-mist px-4 py-4 text-sm text-muted">
-                    현재 묶음에서는 추가로 비교할 유사 매물이 없습니다.
+                    현재 묶음에는 추가 비교 매물이 없습니다.
                   </div>
                 ) : (
                   comparableListings.slice(0, 6).map((item) => (
                     <div
-                      key={item.id}
+                      key={`${item.sourceMarket}-${item.id}`}
                       className="flex items-start gap-3 rounded-2xl border border-line bg-white px-3 py-3"
                     >
                       <Image

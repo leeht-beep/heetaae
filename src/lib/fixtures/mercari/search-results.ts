@@ -1,5 +1,6 @@
-import { MERCARI_MOCK_LISTINGS } from "@/lib/mock";
+﻿import type { MERCARI_MOCK_LISTINGS } from "@/lib/mock";
 import { matchesSearchQuery } from "@/lib/utils/normalize";
+import { MERCARI_MOCK_LISTINGS as MERCARI_MOCK_LISTINGS_VALUE } from "@/lib/mock";
 import { FixtureResponseMeta, MercariRawListing } from "@/lib/fixtures/types";
 import { MockMarketListing } from "@/lib/types/market";
 
@@ -39,7 +40,7 @@ function buildSearchText(item: MercariRawListing): string {
     .join(" ");
 }
 
-export const MERCARI_RAW_FIXTURE_ITEMS: MercariRawListing[] = MERCARI_MOCK_LISTINGS.map(
+export const MERCARI_RAW_FIXTURE_ITEMS: MercariRawListing[] = MERCARI_MOCK_LISTINGS_VALUE.map(
   toMercariRawListing,
 );
 
@@ -64,3 +65,4 @@ export function buildMercariMalformedFixtureItem(): MercariRawListing {
     status: "on_sale",
   };
 }
+

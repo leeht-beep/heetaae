@@ -1,4 +1,4 @@
-import {
+﻿import type {
   CategoryPresetId,
   CategoryPresetSource,
   MarketId,
@@ -150,3 +150,4 @@ export interface SearchBenchmarkReport {
   tuningPriorities: string[];
   regression: BenchmarkRegressionReport;
 }
+

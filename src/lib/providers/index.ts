@@ -1,4 +1,4 @@
-import { MarketDataSource } from "@/lib/providers/base";
+﻿import type { MarketDataSource } from "@/lib/providers/base";
 import { MarketId } from "@/lib/types/market";
 import { bunjangProvider } from "@/lib/providers/bunjangProvider";
 import { fruitsfamilyProvider } from "@/lib/providers/fruitsfamilyProvider";
@@ -11,3 +11,4 @@ export const marketDataSources: Array<MarketDataSource<unknown, Record<string, u
 ];
 
 export const MARKET_SOURCE_ORDER: MarketId[] = marketDataSources.map((source) => source.id);
+

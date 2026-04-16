@@ -129,6 +129,10 @@ export interface ProviderDebugInfo {
     dropReasons?: DropReasonSummary[];
     blockedReasons?: string[];
     requestedUrls?: string[];
+    responseStatus?: number;
+    finalUrl?: string;
+    antiBotSignatures?: string[];
+    parserFailure?: boolean;
     sessionId?: string;
     fingerprintId?: string;
     fingerprintLabel?: string;

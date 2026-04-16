@@ -1,5 +1,6 @@
-import { BUNJANG_MOCK_LISTINGS } from "@/lib/mock";
+﻿import type { BUNJANG_MOCK_LISTINGS } from "@/lib/mock";
 import { FixtureResponseMeta, BunjangRawListing } from "@/lib/fixtures/types";
+import { BUNJANG_MOCK_LISTINGS as BUNJANG_MOCK_LISTINGS_VALUE } from "@/lib/mock";
 import { MockMarketListing } from "@/lib/types/market";
 import { matchesSearchQuery } from "@/lib/utils/normalize";
 
@@ -39,7 +40,7 @@ function buildSearchText(item: BunjangRawListing): string {
     .join(" ");
 }
 
-export const BUNJANG_RAW_FIXTURE_ITEMS: BunjangRawListing[] = BUNJANG_MOCK_LISTINGS.map(
+export const BUNJANG_RAW_FIXTURE_ITEMS: BunjangRawListing[] = BUNJANG_MOCK_LISTINGS_VALUE.map(
   toBunjangRawListing,
 );
 
@@ -64,3 +65,4 @@ export function buildBunjangMalformedFixtureItem(): BunjangRawListing {
     saleStatus: "SALE",
   };
 }
+

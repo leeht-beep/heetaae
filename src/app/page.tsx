@@ -3,6 +3,9 @@ import { DEFAULT_COST_SETTINGS, DEFAULT_SEARCH_TERM } from "@/lib/constants";
 import { searchResellOpportunities } from "@/lib/services/search-service";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+export const revalidate = 0;
+export const maxDuration = 60;
 
 export default async function Home() {
   const initialData = await searchResellOpportunities(

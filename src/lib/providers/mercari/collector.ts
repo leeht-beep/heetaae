@@ -1,4 +1,8 @@
+import { execFile } from "node:child_process";
+import { generateKeyPairSync, randomBytes, randomUUID, sign } from "node:crypto";
 import { existsSync } from "node:fs";
+import path from "node:path";
+import { promisify } from "node:util";
 
 import type { MercariRawListing } from "@/lib/fixtures/types";
 import {
@@ -36,9 +40,11 @@ import { buildProviderQueryVariants, preprocessSearchQuery } from "@/lib/utils/q
 const MERCARI_CACHE_TTL_MS = 45_000;
 const MERCARI_MAX_VARIANTS = 2;
 const MERCARI_FETCH_RETRIES = 1;
+const execFileAsync = promisify(execFile);
 
-type MercariRenderer = "http" | "playwright";
+type MercariRenderer = "api" | "http" | "playwright";
 const MERCARI_SEARCH_API_URL_FRAGMENT = "api.mercari.jp/v2/entities:search";
+const MERCARI_SEARCH_API_URL = `https://${MERCARI_SEARCH_API_URL_FRAGMENT}`;
 
 interface MercariCollectorMeta extends Record<string, unknown> {
   strategy: "fetch_then_browser_fallback";
@@ -50,6 +56,8 @@ interface MercariCollectorMeta extends Record<string, unknown> {
   sessionId: string;
   fingerprintId?: string;
   fingerprintLabel?: string;
+  browserExecutablePath?: string;
+  browserLaunchErrors?: string[];
 }
 
 interface MercariAttemptDiagnostics {
@@ -57,6 +65,14 @@ interface MercariAttemptDiagnostics {
   finalUrl?: string;
   antiBotSignatures: string[];
   parserFailure: boolean;
+  browserExecutablePath?: string;
+  browserLaunchErrors?: string[];
+  apiRequest?: {
+    url: string;
+    method: string;
+    postData?: string;
+    headers?: Record<string, string>;
+  };
 }
 
 interface MercariAttemptResult {
@@ -115,8 +131,19 @@ function resolveMercariSearchUrl(query: string, status: MercariSearchStatus): st
   return url.toString();
 }
 
-function resolveBrowserExecutablePath(): string | null {
-  return MERCARI_CHROME_CANDIDATES.find((candidate) => existsSync(candidate)) ?? null;
+function resolveBrowserExecutablePaths(): string[] {
+  const preferredCandidates = [...MERCARI_CHROME_CANDIDATES].sort((left, right) => {
+    const leftScore = /msedge/i.test(left) ? 0 : 1;
+    const rightScore = /msedge/i.test(right) ? 0 : 1;
+
+    if (leftScore !== rightScore) {
+      return leftScore - rightScore;
+    }
+
+    return left.localeCompare(right);
+  });
+
+  return preferredCandidates.filter((candidate) => existsSync(candidate));
 }
 
 function getFingerprint(seed: number): MercariRequestFingerprint {
@@ -165,11 +192,150 @@ function compactWarnings(warnings: string[], limit = 10): string[] {
   return [...unique.slice(0, limit), `${unique.length - limit} additional warnings omitted.`];
 }
 
+function toBase64Url(value: Buffer | string): string {
+  return Buffer.from(value)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function createMercariSessionIds() {
+  return {
+    deviceUuid: randomUUID(),
+    searchSessionId: randomBytes(16).toString("hex"),
+  };
+}
+
+function createMercariDpopProof(options: {
+  url: string;
+  method: "POST";
+  deviceUuid: string;
+}): string {
+  const { publicKey, privateKey } = generateKeyPairSync("ec", {
+    namedCurve: "P-256",
+  });
+  const exported = publicKey.export({ format: "jwk" }) as {
+    kty?: string;
+    crv?: string;
+    x?: string;
+    y?: string;
+  };
+  const header = {
+    typ: "dpop+jwt",
+    alg: "ES256",
+    jwk: {
+      kty: exported.kty,
+      crv: exported.crv,
+      x: exported.x,
+      y: exported.y,
+    },
+  };
+  const payload = {
+    iat: Math.floor(Date.now() / 1000),
+    jti: randomUUID(),
+    htu: options.url,
+    htm: options.method,
+    uuid: options.deviceUuid,
+  };
+  const encoded = `${toBase64Url(JSON.stringify(header))}.${toBase64Url(
+    JSON.stringify(payload),
+  )}`;
+  const signature = sign("SHA256", Buffer.from(encoded), {
+    key: privateKey,
+    dsaEncoding: "ieee-p1363",
+  });
+
+  return `${encoded}.${toBase64Url(signature)}`;
+}
+
+function buildMercariClientHintHeaders(userAgent: string): Record<string, string> {
+  if (/Edg\//i.test(userAgent)) {
+    return {
+      "sec-ch-ua": '"Microsoft Edge";v="135", "Not.A/Brand";v="8", "Chromium";v="135"',
+      "sec-ch-ua-mobile": "?0",
+      "sec-ch-ua-platform": '"Windows"',
+    };
+  }
+
+  if (/Chrome\//i.test(userAgent)) {
+    return {
+      "sec-ch-ua": '"Google Chrome";v="135", "Not.A/Brand";v="8", "Chromium";v="135"',
+      "sec-ch-ua-mobile": "?0",
+      "sec-ch-ua-platform": '"Windows"',
+    };
+  }
+
+  return {};
+}
+
+function buildMercariSearchApiRequestBody(options: {
+  query: string;
+  statusHint: MercariSearchStatus;
+  limit: number;
+  deviceUuid: string;
+  searchSessionId: string;
+}) {
+  return {
+    userId: "",
+    config: {
+      responseToggles: ["QUERY_SUGGESTION_WEB_1"],
+    },
+    pageSize: Math.max(60, Math.min(120, options.limit * 8)),
+    pageToken: "",
+    searchSessionId: options.searchSessionId,
+    source: "BaseSerp",
+    indexRouting: "INDEX_ROUTING_UNSPECIFIED",
+    thumbnailTypes: [],
+    searchCondition: {
+      keyword: options.query,
+      excludeKeyword: "",
+      sort: "SORT_SCORE",
+      order: "ORDER_DESC",
+      status:
+        options.statusHint === "sold_out" ? ["STATUS_SOLD_OUT"] : ["STATUS_ON_SALE"],
+      sizeId: [],
+      categoryId: [],
+      brandId: [],
+      sellerId: [],
+      priceMin: 0,
+      priceMax: 0,
+      itemConditionId: [],
+      shippingPayerId: [],
+      shippingFromArea: [],
+      shippingMethod: [],
+      colorId: [],
+      hasCoupon: false,
+      attributes: [],
+      itemTypes: [],
+      skuIds: [],
+      shopIds: [],
+      excludeShippingMethodIds: [],
+    },
+    serviceFrom: "suruga",
+    withItemBrand: true,
+    withItemSize: false,
+    withItemPromotions: true,
+    withItemSizes: true,
+    withShopname: false,
+    useDynamicAttribute: true,
+    withSuggestedItems: true,
+    withOfferPricePromotion: true,
+    withProductSuggest: true,
+    withParentProducts: false,
+    withProductArticles: true,
+    withSearchConditionId: false,
+    withAuction: true,
+    laplaceDeviceUuid: options.deviceUuid,
+  };
+}
+
 function detectAntiBotSignatures(options: {
   html: string;
   bodyText?: string;
   responseStatus?: number;
   finalUrl?: string;
+  allowedUrlPrefixes?: string[];
 }): string[] {
   const signatures: string[] = [];
   const combined = `${options.bodyText ?? ""}`;
@@ -196,7 +362,12 @@ function detectAntiBotSignatures(options: {
     signatures.push("jp_block_copy");
   }
 
-  if (options.finalUrl && !options.finalUrl.startsWith(MERCARI_BASE_URL)) {
+  if (
+    options.finalUrl &&
+    (options.allowedUrlPrefixes ?? [MERCARI_BASE_URL]).every(
+      (prefix) => !options.finalUrl?.startsWith(prefix),
+    )
+  ) {
     signatures.push("redirected_away");
   }
 
@@ -265,6 +436,15 @@ function buildErrorInfo(status: ProviderExecutionStatus, warnings: string[]) {
     });
   }
 
+  if (status === "timeout") {
+    return createProviderError({
+      type: "timeout",
+      message: "Mercari collection timed out before usable results were returned.",
+      retryable: true,
+      details,
+    });
+  }
+
   return createProviderError({
     type: "unknown",
     message: "Mercari collection failed.",
@@ -276,6 +456,163 @@ function buildErrorInfo(status: ProviderExecutionStatus, warnings: string[]) {
 async function loadPlaywrightChromium() {
   const playwrightModule = (await import("playwright-core")) as typeof import("playwright-core");
   return playwrightModule.chromium;
+}
+
+async function runMercariApiCollector(options: {
+  query: string;
+  url: string;
+  statusHint: MercariSearchStatus;
+  timeoutMs: number;
+  fingerprint: MercariRequestFingerprint;
+  limit: number;
+}): Promise<MercariAttemptResult> {
+  await waitForMercariRateLimit();
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs);
+  const session = createMercariSessionIds();
+  const body = buildMercariSearchApiRequestBody({
+    query: options.query,
+    statusHint: options.statusHint,
+    limit: options.limit,
+    deviceUuid: session.deviceUuid,
+    searchSessionId: session.searchSessionId,
+  });
+  const headers = {
+    Accept: "application/json, text/plain, */*",
+    "Accept-Language":
+      options.fingerprint.acceptLanguage || MERCARI_DEFAULT_ACCEPT_LANGUAGE,
+    "Cache-Control": "no-cache",
+    Pragma: "no-cache",
+    "Content-Type": "application/json",
+    Origin: MERCARI_BASE_URL,
+    Referer: `${MERCARI_BASE_URL}/`,
+    "User-Agent": options.fingerprint.userAgent,
+    "x-country-code": "JP",
+    "x-platform": "web",
+    dpop: createMercariDpopProof({
+      url: MERCARI_SEARCH_API_URL,
+      method: "POST",
+      deviceUuid: session.deviceUuid,
+    }),
+    ...buildMercariClientHintHeaders(options.fingerprint.userAgent),
+  };
+
+  try {
+    const response = await fetch(MERCARI_SEARCH_API_URL, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      redirect: "follow",
+      signal: controller.signal,
+    });
+    const responseText = await response.text();
+    const antiBotSignatures = detectAntiBotSignatures({
+      html: responseText,
+      bodyText: responseText,
+      responseStatus: response.status,
+      finalUrl: response.url,
+      allowedUrlPrefixes: [MERCARI_BASE_URL, MERCARI_SEARCH_API_URL],
+    });
+
+    if (antiBotSignatures.length > 0) {
+      return {
+        status: "blocked",
+        items: [],
+        warnings: [
+          `Mercari search API was blocked (${antiBotSignatures.join(", ")}).`,
+        ],
+        requestedUrls: [options.url, MERCARI_SEARCH_API_URL, response.url],
+        retryCount: 0,
+        usedFallback: false,
+        renderer: "api",
+        diagnostics: {
+          responseStatus: response.status,
+          finalUrl: response.url,
+          antiBotSignatures,
+          parserFailure: false,
+          apiRequest: {
+            url: MERCARI_SEARCH_API_URL,
+            method: "POST",
+            postData: JSON.stringify(body),
+            headers,
+          },
+        },
+      };
+    }
+
+    let payload: unknown;
+
+    try {
+      payload = responseText ? JSON.parse(responseText) : undefined;
+    } catch (error) {
+      return {
+        status: response.ok ? "parse_error" : "blocked",
+        items: [],
+        warnings: compactWarnings([
+          response.ok
+            ? "Mercari search API returned a non-JSON response."
+            : `Mercari search API returned HTTP ${response.status}.`,
+          error instanceof Error ? error.message : String(error),
+        ]),
+        requestedUrls: [options.url, MERCARI_SEARCH_API_URL, response.url],
+        retryCount: 0,
+        usedFallback: false,
+        renderer: "api",
+        diagnostics: {
+          responseStatus: response.status,
+          finalUrl: response.url,
+          antiBotSignatures: response.ok ? [] : [`http_${response.status}`],
+          parserFailure: response.ok,
+          apiRequest: {
+            url: MERCARI_SEARCH_API_URL,
+            method: "POST",
+            postData: JSON.stringify(body),
+            headers,
+          },
+        },
+      };
+    }
+
+    const parsed = parseMercariSearchApiResponse(payload, {
+      statusHint: options.statusHint,
+      source: "http",
+      apiUrl: response.url,
+    });
+    const status: ProviderExecutionStatus =
+      parsed.items.length > 0
+        ? "success"
+        : parsed.emptyResult
+          ? "empty"
+          : "parse_error";
+
+    return {
+      status,
+      items: parsed.items.slice(0, options.limit),
+      warnings: [
+        ...(response.status >= 400 ? [`Mercari search API returned ${response.status}.`] : []),
+        ...parsed.warnings,
+      ],
+      requestedUrls: [options.url, MERCARI_SEARCH_API_URL, response.url],
+      retryCount: 0,
+      usedFallback: false,
+      renderer: "api",
+      diagnostics: {
+        responseStatus: response.status,
+        finalUrl: response.url,
+        antiBotSignatures: [],
+        parserFailure: status === "parse_error",
+        apiRequest: {
+          url: MERCARI_SEARCH_API_URL,
+          method: "POST",
+          postData: JSON.stringify(body),
+          headers,
+        },
+      },
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 async function runMercariFetchCollector(options: {
@@ -369,15 +706,16 @@ async function runMercariFetchCollector(options: {
 }
 
 async function runMercariBrowserCollector(options: {
+  query: string;
   url: string;
   statusHint: MercariSearchStatus;
   timeoutMs: number;
   fingerprint: MercariRequestFingerprint;
   limit: number;
 }): Promise<MercariAttemptResult> {
-  const executablePath = resolveBrowserExecutablePath();
+  const executablePaths = resolveBrowserExecutablePaths();
 
-  if (!executablePath) {
+  if (executablePaths.length === 0) {
     return {
       status: "blocked",
       items: [],
@@ -389,25 +727,58 @@ async function runMercariBrowserCollector(options: {
       diagnostics: {
         antiBotSignatures: ["browser_missing"],
         parserFailure: false,
+        browserLaunchErrors: ["No browser executable candidates were found."],
       },
     };
   }
 
   const chromium = await loadPlaywrightChromium();
   await waitForMercariRateLimit();
+  const launchErrors: string[] = [];
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let selectedExecutablePath: string | undefined;
 
-  const browser = await chromium.launch({
-    executablePath,
-    headless: true,
-    args: [
-      "--disable-gpu",
-      "--disable-dev-shm-usage",
-      "--no-first-run",
-      "--no-default-browser-check",
-      "--disable-blink-features=AutomationControlled",
-      "--lang=ja-JP",
-    ],
-  });
+  for (const candidate of executablePaths) {
+    try {
+      browser = await chromium.launch({
+        executablePath: candidate,
+        headless: true,
+        args: [
+          "--disable-gpu",
+          "--disable-dev-shm-usage",
+          "--no-first-run",
+          "--no-default-browser-check",
+          "--disable-blink-features=AutomationControlled",
+          "--lang=ja-JP",
+        ],
+      });
+      selectedExecutablePath = candidate;
+      break;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      launchErrors.push(`${candidate}: ${message}`);
+    }
+  }
+
+  if (!browser) {
+    return {
+      status: "error",
+      items: [],
+      warnings: compactWarnings([
+        "Mercari browser fallback could not launch any local browser executable.",
+        ...launchErrors,
+      ]),
+      requestedUrls: [options.url],
+      retryCount: 0,
+      usedFallback: true,
+      renderer: "playwright",
+      diagnostics: {
+        antiBotSignatures: ["browser_launch_failed"],
+        parserFailure: false,
+        browserLaunchErrors: launchErrors,
+      },
+    };
+  }
 
   try {
     const context = await browser.newContext({
@@ -436,6 +807,14 @@ async function runMercariBrowserCollector(options: {
     page.setDefaultNavigationTimeout(Math.min(options.timeoutMs, MERCARI_BROWSER_TIMEOUT_MS));
     page.setDefaultTimeout(Math.min(options.timeoutMs, MERCARI_BROWSER_TIMEOUT_MS));
     const apiCaptureTasks: Promise<void>[] = [];
+    let searchApiRequest:
+      | {
+          url: string;
+          method: string;
+          postData?: string;
+          headers?: Record<string, string>;
+        }
+      | undefined;
     let searchApiCapture:
       | {
           url: string;
@@ -444,6 +823,19 @@ async function runMercariBrowserCollector(options: {
           error?: string;
         }
       | undefined;
+
+    page.on("request", (apiRequest) => {
+      if (!apiRequest.url().includes(MERCARI_SEARCH_API_URL_FRAGMENT)) {
+        return;
+      }
+
+      searchApiRequest = {
+        url: apiRequest.url(),
+        method: apiRequest.method(),
+        postData: apiRequest.postData() ?? undefined,
+        headers: apiRequest.headers(),
+      };
+    });
 
     page.on("response", (apiResponse) => {
       if (!apiResponse.url().includes(MERCARI_SEARCH_API_URL_FRAGMENT)) {
@@ -553,6 +945,9 @@ async function runMercariBrowserCollector(options: {
             finalUrl,
             antiBotSignatures: [],
             parserFailure: false,
+            browserExecutablePath: selectedExecutablePath,
+            browserLaunchErrors: launchErrors.length > 0 ? launchErrors : undefined,
+            apiRequest: searchApiRequest,
           },
         };
       }
@@ -606,6 +1001,9 @@ async function runMercariBrowserCollector(options: {
             finalUrl,
             antiBotSignatures: [],
             parserFailure: false,
+            browserExecutablePath: selectedExecutablePath,
+            browserLaunchErrors: launchErrors.length > 0 ? launchErrors : undefined,
+            apiRequest: searchApiRequest,
           },
         };
       }
@@ -672,6 +1070,9 @@ async function runMercariBrowserCollector(options: {
           finalUrl,
           antiBotSignatures,
           parserFailure: false,
+          browserExecutablePath: selectedExecutablePath,
+          browserLaunchErrors: launchErrors.length > 0 ? launchErrors : undefined,
+          apiRequest: searchApiRequest,
         },
       };
     }
@@ -711,10 +1112,120 @@ async function runMercariBrowserCollector(options: {
         finalUrl,
         antiBotSignatures: [],
         parserFailure: status === "parse_error",
+        browserExecutablePath: selectedExecutablePath,
+        browserLaunchErrors: launchErrors.length > 0 ? launchErrors : undefined,
+        apiRequest: searchApiRequest,
       },
     };
   } finally {
     await browser.close().catch(() => undefined);
+  }
+}
+
+async function runMercariBrowserWorkerCollector(options: {
+  query: string;
+  url: string;
+  statusHint: MercariSearchStatus;
+  timeoutMs: number;
+  limit: number;
+}): Promise<MercariAttemptResult> {
+  const workerScriptPath = path.resolve(process.cwd(), "scripts", "mercari-live-smoke.ts");
+  const aliasLoaderPath = path.resolve(process.cwd(), "scripts", "alias-loader.mjs");
+
+  if (!existsSync(workerScriptPath) || !existsSync(aliasLoaderPath)) {
+    return {
+      status: "error",
+      items: [],
+      warnings: ["Mercari browser smoke script is not available in the current runtime."],
+      requestedUrls: [options.url],
+      retryCount: 0,
+      usedFallback: true,
+      renderer: "playwright",
+      diagnostics: {
+        antiBotSignatures: ["worker_script_missing"],
+        parserFailure: false,
+      },
+    };
+  }
+
+  try {
+    const { stdout, stderr } = await execFileAsync(
+      process.execPath,
+      [
+        "--experimental-strip-types",
+        "--loader",
+        aliasLoaderPath,
+        workerScriptPath,
+        options.query,
+        `--status=${options.statusHint}`,
+        `--limit=${options.limit}`,
+        `--timeout=${options.timeoutMs}`,
+      ],
+      {
+        cwd: process.cwd(),
+        timeout: Math.min(options.timeoutMs + 8_000, 45_000),
+        maxBuffer: 8 * 1024 * 1024,
+        env: {
+          ...process.env,
+          MERCARI_CHILD_PREVIEW: "1",
+        },
+      },
+    );
+    const output = stdout.trim();
+
+    if (!output) {
+      return {
+        status: "error",
+        items: [],
+        warnings: compactWarnings([
+          "Mercari browser worker finished without JSON output.",
+          stderr.trim(),
+        ]),
+        requestedUrls: [options.url],
+        retryCount: 0,
+        usedFallback: true,
+        renderer: "playwright",
+        diagnostics: {
+          antiBotSignatures: ["worker_empty_output"],
+          parserFailure: false,
+        },
+      };
+    }
+
+    const parsed = JSON.parse(output) as MercariSmokePreviewResult & {
+      status: ProviderExecutionStatus;
+      warnings: string[];
+      requestedUrls: string[];
+      renderer: MercariRenderer;
+      diagnostics: MercariAttemptDiagnostics;
+      items: MercariRawListing[];
+    };
+    return {
+      status: parsed.status,
+      items: parsed.items,
+      warnings: parsed.warnings,
+      requestedUrls: parsed.requestedUrls,
+      retryCount: 0,
+      usedFallback: true,
+      renderer: parsed.renderer,
+      diagnostics: parsed.diagnostics,
+    };
+  } catch (error) {
+    return {
+      status: "error",
+      items: [],
+      warnings: compactWarnings([
+        error instanceof Error ? error.message : String(error),
+      ]),
+      requestedUrls: [options.url],
+      retryCount: 0,
+      usedFallback: true,
+      renderer: "playwright",
+      diagnostics: {
+        antiBotSignatures: ["worker_execution_failed"],
+        parserFailure: false,
+      },
+    };
   }
 }
 
@@ -738,6 +1249,8 @@ async function collectMercariVariant(options: {
   };
   let status: ProviderExecutionStatus = "empty";
   const deadline = Date.now() + options.timeoutMs;
+  const allowHtmlFallback = process.env.MERCARI_DISABLE_HTML_FALLBACK !== "1";
+  const allowBrowserFallback = process.env.MERCARI_DISABLE_BROWSER_FALLBACK !== "1";
 
   for (const statusHint of ["on_sale", "sold_out"] as MercariSearchStatus[]) {
     const remainingMs = deadline - Date.now();
@@ -761,41 +1274,94 @@ async function collectMercariVariant(options: {
         ? Math.max(5000, Math.min(remainingMs - 500, 9500))
         : Math.max(4500, Math.min(remainingMs - 500, 7000));
 
-    const fetched = await retryTask(
+    const apiAttempt = await retryTask(
       () =>
-        runMercariFetchCollector({
+        runMercariApiCollector({
+          query: options.variant.query,
           url,
           statusHint,
           timeoutMs: Math.min(attemptTimeoutMs, MERCARI_HTTP_TIMEOUT_MS),
           fingerprint,
+          limit: options.limit,
         }),
       {
         retries: MERCARI_FETCH_RETRIES,
         delayMs: 600,
       },
     );
-    retryCount += fetched.retryCount;
-    let selected = fetched.value;
+    retryCount += apiAttempt.retryCount;
+    let selected = apiAttempt.value;
 
     if (
-      selected.status === "blocked" ||
-      selected.status === "parse_error" ||
-      (selected.status === "empty" && selectedItems.length === 0)
+      allowHtmlFallback &&
+      (selected.status === "blocked" ||
+        selected.status === "parse_error" ||
+        (selected.status === "empty" && selectedItems.length === 0))
+    ) {
+      const htmlAttempt = await retryTask(
+        () =>
+          runMercariFetchCollector({
+            url,
+            statusHint,
+            timeoutMs: Math.min(attemptTimeoutMs, MERCARI_HTTP_TIMEOUT_MS),
+            fingerprint,
+          }),
+        {
+          retries: MERCARI_FETCH_RETRIES,
+          delayMs: 600,
+        },
+      );
+      retryCount += htmlAttempt.retryCount;
+
+      if (
+        htmlAttempt.value.items.length > 0 ||
+        htmlAttempt.value.status === "empty" ||
+        htmlAttempt.value.status === "success" ||
+        htmlAttempt.value.status === "blocked" ||
+        htmlAttempt.value.status === "parse_error"
+      ) {
+        selected = htmlAttempt.value;
+      }
+    }
+
+    if (
+      allowBrowserFallback &&
+      (selected.status === "blocked" ||
+        selected.status === "parse_error" ||
+        (selected.status === "empty" && selectedItems.length === 0))
     ) {
       const browserAttempt = await runMercariBrowserCollector({
+        query: options.variant.query,
         url,
         statusHint,
         timeoutMs: attemptTimeoutMs,
         fingerprint,
         limit: options.limit,
       });
+      const resolvedBrowserAttempt =
+        process.env.MERCARI_WORKER_MODE !== "1" &&
+        process.env.MERCARI_CHILD_PREVIEW !== "1" &&
+        browserAttempt.status === "error" &&
+        (browserAttempt.diagnostics.browserLaunchErrors?.length ?? 0) > 0
+          ? await runMercariBrowserWorkerCollector({
+              query: options.variant.query,
+              url,
+              statusHint,
+              timeoutMs: attemptTimeoutMs,
+              limit: options.limit,
+            })
+          : browserAttempt;
 
       if (
-        browserAttempt.items.length > 0 ||
-        browserAttempt.status === "empty" ||
-        browserAttempt.status === "success"
+        resolvedBrowserAttempt.items.length > 0 ||
+        resolvedBrowserAttempt.status === "empty" ||
+        resolvedBrowserAttempt.status === "success" ||
+        resolvedBrowserAttempt.status === "blocked" ||
+        resolvedBrowserAttempt.status === "parse_error" ||
+        resolvedBrowserAttempt.status === "error" ||
+        resolvedBrowserAttempt.status === "timeout"
       ) {
-        selected = browserAttempt;
+        selected = resolvedBrowserAttempt;
       }
     }
 
@@ -822,6 +1388,11 @@ async function collectMercariVariant(options: {
 
     if (selected.status === "parse_error") {
       status = selectedItems.length > 0 ? "partial" : "parse_error";
+      continue;
+    }
+
+    if (selected.status === "error" || selected.status === "timeout") {
+      status = selectedItems.length > 0 ? "partial" : selected.status;
       continue;
     }
 
@@ -874,9 +1445,9 @@ async function collectMercariVariant(options: {
   };
 }
 
-export async function runMercariSmokePreview(
+export async function runMercariStandalonePreview(
   query: string,
-  options: { limit?: number; timeoutMs?: number } = {},
+  options: { limit?: number; timeoutMs?: number; statusHint?: MercariSearchStatus } = {},
 ): Promise<MercariSmokePreviewResult> {
   const queryPlan = preprocessSearchQuery(query);
   const variant =
@@ -892,15 +1463,20 @@ export async function runMercariSmokePreview(
   const fingerprint = getFingerprint(0);
   const limit = options.limit ?? 6;
   const timeoutMs = options.timeoutMs ?? 18_000;
-  const url = resolveMercariSearchUrl(variant.query, "on_sale");
+  const statusHint = options.statusHint ?? "on_sale";
+  const url = resolveMercariSearchUrl(variant.query, statusHint);
+  const allowHtmlFallback = process.env.MERCARI_DISABLE_HTML_FALLBACK !== "1";
+  const allowBrowserFallback = process.env.MERCARI_DISABLE_BROWSER_FALLBACK !== "1";
 
-  const fetched = await retryTask(
+  const apiAttempt = await retryTask(
     () =>
-      runMercariFetchCollector({
+      runMercariApiCollector({
+        query: variant.query,
         url,
-        statusHint: "on_sale",
+        statusHint,
         timeoutMs: Math.min(timeoutMs, MERCARI_HTTP_TIMEOUT_MS),
         fingerprint,
+        limit,
       }),
     {
       retries: 1,
@@ -908,22 +1484,68 @@ export async function runMercariSmokePreview(
     },
   );
 
-  let selected = fetched.value;
+  let selected = apiAttempt.value;
 
   if (
-    selected.status === "blocked" ||
-    selected.status === "parse_error" ||
-    selected.status === "empty"
+    allowHtmlFallback &&
+    (selected.status === "blocked" ||
+      selected.status === "parse_error" ||
+      selected.status === "empty")
+  ) {
+    const htmlAttempt = await retryTask(
+      () =>
+        runMercariFetchCollector({
+          url,
+          statusHint,
+          timeoutMs: Math.min(timeoutMs, MERCARI_HTTP_TIMEOUT_MS),
+          fingerprint,
+        }),
+      {
+        retries: 1,
+        delayMs: 600,
+      },
+    );
+
+    if (
+      htmlAttempt.value.items.length > 0 ||
+      htmlAttempt.value.status === "empty" ||
+      htmlAttempt.value.status === "success" ||
+      htmlAttempt.value.status === "blocked" ||
+      htmlAttempt.value.status === "parse_error"
+    ) {
+      selected = htmlAttempt.value;
+    }
+  }
+
+  if (
+    allowBrowserFallback &&
+    (selected.status === "blocked" ||
+      selected.status === "parse_error" ||
+      selected.status === "empty")
   ) {
     const browserAttempt = await runMercariBrowserCollector({
+      query: variant.query,
       url,
-      statusHint: "on_sale",
+      statusHint,
       timeoutMs,
       fingerprint,
       limit,
     });
+    const resolvedBrowserAttempt =
+      process.env.MERCARI_WORKER_MODE !== "1" &&
+      process.env.MERCARI_CHILD_PREVIEW !== "1" &&
+      browserAttempt.status === "error" &&
+      (browserAttempt.diagnostics.browserLaunchErrors?.length ?? 0) > 0
+        ? await runMercariBrowserWorkerCollector({
+            query: variant.query,
+            url,
+            statusHint,
+            timeoutMs,
+            limit,
+          })
+        : browserAttempt;
 
-    selected = browserAttempt;
+    selected = resolvedBrowserAttempt;
   }
 
   return {
@@ -939,6 +1561,13 @@ export async function runMercariSmokePreview(
       limit,
     ),
   };
+}
+
+export async function runMercariSmokePreview(
+  query: string,
+  options: { limit?: number; timeoutMs?: number } = {},
+): Promise<MercariSmokePreviewResult> {
+  return runMercariStandalonePreview(query, options);
 }
 
 export const mercariRealCollector: RawMarketCollector<
@@ -1034,14 +1663,25 @@ export const mercariRealCollector: RawMarketCollector<
 
     const status: ProviderExecutionStatus =
       rawItems.length > 0
-        ? attemptStatuses.some((value) => value === "partial" || value === "blocked" || value === "parse_error")
+        ? attemptStatuses.some(
+            (value) =>
+              value === "partial" ||
+              value === "blocked" ||
+              value === "parse_error" ||
+              value === "error" ||
+              value === "timeout",
+          )
           ? "partial"
           : "success"
         : attemptStatuses.some((value) => value === "blocked")
           ? "blocked"
           : attemptStatuses.some((value) => value === "parse_error")
             ? "parse_error"
-            : "empty";
+            : attemptStatuses.some((value) => value === "timeout")
+              ? "timeout"
+              : attemptStatuses.some((value) => value === "error")
+                ? "error"
+                : "empty";
     const renderer = finalAttempt?.renderer ?? "http";
     const fallbackUsed = attemptResults.some((attempt) => attempt.usedFallback);
     const retryCount = attemptResults.reduce((sum, attempt) => sum + attempt.retryCount, 0);
@@ -1069,6 +1709,8 @@ export const mercariRealCollector: RawMarketCollector<
         sessionId,
         fingerprintId: finalAttempt?.fingerprint.id,
         fingerprintLabel: finalAttempt?.fingerprint.label,
+        browserExecutablePath: finalAttempt?.diagnostics.browserExecutablePath,
+        browserLaunchErrors: finalAttempt?.diagnostics.browserLaunchErrors,
       },
       warnings,
       confidenceScore,
@@ -1090,9 +1732,12 @@ export const mercariRealCollector: RawMarketCollector<
           finalUrl: finalAttempt?.diagnostics.finalUrl,
           antiBotSignatures: finalAttempt?.diagnostics.antiBotSignatures,
           parserFailure: finalAttempt?.diagnostics.parserFailure,
+          renderer,
           sessionId,
           fingerprintId: finalAttempt?.fingerprint.id,
           fingerprintLabel: finalAttempt?.fingerprint.label,
+          browserExecutablePath: finalAttempt?.diagnostics.browserExecutablePath,
+          browserLaunchErrors: finalAttempt?.diagnostics.browserLaunchErrors,
           cooldownUntil:
             mercariCooldownUntil > Date.now()
               ? new Date(mercariCooldownUntil).toISOString()

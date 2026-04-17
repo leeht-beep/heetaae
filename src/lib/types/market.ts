@@ -139,6 +139,16 @@ export interface ProviderDebugInfo {
     cooldownUntil?: string;
     browserFallbackUsed?: boolean;
     warmupUsed?: boolean;
+    renderer?: string;
+    parserOutputCount?: number;
+    finalCount?: number;
+    rawSampleTitles?: string[];
+    normalizedSampleTitles?: string[];
+    finalSampleTitles?: string[];
+    finalSampleUrls?: string[];
+    browserExecutablePath?: string;
+    browserLaunchErrors?: string[];
+    providerModeSource?: "route" | "config" | "default";
   };
 }
 
@@ -147,6 +157,12 @@ export interface SearchDebugInfo {
   totalDurationMs: number;
   queryPlan: SearchQueryPlan;
   providerDebug: ProviderDebugInfo[];
+  environment?: {
+    routeRuntime?: string;
+    nodeVersion?: string;
+    platform?: string;
+    deploymentTarget?: string;
+  };
 }
 
 export interface MarketListing {

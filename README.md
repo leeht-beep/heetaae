@@ -65,18 +65,21 @@ Mercari real collection now uses a session-aware collector in:
 What changed:
 
 - Stronger blocked detection based on challenge markers plus missing item signals
-- Mercari now defaults to a Playwright-based renderer using the local Chrome/Edge binary for real searches
-- Playwright collection now captures Mercari's live `https://api.mercari.jp/v2/entities:search` response first, then falls back to DOM card parsing and finally HTML parsing only when needed
+- Mercari now uses the live `https://api.mercari.jp/v2/entities:search` API as the primary real collector path
+- API collection generates a per-request DPoP proof and device/session identifiers so app route collection can work without launching a browser
+- HTML parsing remains as a secondary fallback, and browser-based collection is kept as the last-resort recovery path
 - Mercari query variants are ordered for stability first: original query, brand/model variants, then localized Japanese fallbacks
 - Sold-out scraping is skipped when the active search already consumed most of the provider budget, so active results return reliably instead of timing out
 - Session metadata and fingerprint rotation remain available for fallback and debug
-- Debug summary includes blocked reasons, requested URLs, session ID, fingerprint ID, cooldown, warmup usage, and browser fallback usage
+- Debug summary includes blocked reasons, requested URLs, response status, final URL, session ID, fingerprint ID, cooldown, and browser fallback usage
 
 Useful environment variables:
 
 - `MERCARI_BROWSER_RENDERER=playwright|chrome|auto`
 - `MERCARI_SESSION_ROOT_DIR=/custom/path`
 - `MERCARI_CHROME_PATH=/path/to/chrome`
+- `MERCARI_DISABLE_HTML_FALLBACK=1`
+- `MERCARI_DISABLE_BROWSER_FALLBACK=1`
 
 Notes:
 
@@ -84,6 +87,29 @@ Notes:
 - `auto` can still be used for experimentation, but stable local collection currently prefers Playwright first.
 - Persistent session directories live under the configured Mercari session root.
 - `npm run smoke:mercari -- "Supreme Box Logo Hoodie 24FW"` now validates the isolated Mercari collector and prints live `titleText`, `priceJpy`, `itemUrl`, and `imageUrl` samples before app-level integration.
+- When the API path is healthy, smoke output should now report `renderer: "api"` instead of needing the Playwright fallback.
+
+### Mercari troubleshooting
+
+If Mercari smoke succeeds but the app page still does not show Mercari rows, check these in order:
+
+1. `GET /api/search?q=...&mode=real` and inspect `marketResults[].status` for `mercari`
+2. In development mode, open the Search Debug panel and verify:
+   - `renderer`
+   - `raw / normalized / final`
+   - `response / final url`
+   - `drop reasons`
+3. If app route collection looks different from smoke, confirm the route is running under Node.js runtime:
+   - `src/app/api/search/route.ts`
+   - `src/app/page.tsx`
+4. To isolate Mercari stages:
+   - `MERCARI_DISABLE_HTML_FALLBACK=1 MERCARI_DISABLE_BROWSER_FALLBACK=1 npm run smoke:mercari -- "keyword"`
+   - this checks the API collector only
+5. If the API collector returns rows but UI still hides them, compare:
+   - `rawCount`
+   - `normalizedCount`
+   - `finalCount`
+   - `dropReasons`
 
 ## Bunjang Reliability Notes
 

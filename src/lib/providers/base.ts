@@ -240,10 +240,25 @@ function buildCollectorFailureEnvelope<
     status: providerError.type === "timeout" ? "timeout" : "error",
     rawItems: [],
     meta: {} as TMeta,
-    warnings: [],
+    warnings: providerError.details ? [providerError.details] : [],
     error: providerError,
     confidenceScore: 0,
     durationMs: context.timeoutMs,
+    debug: {
+      market: source.id,
+      attemptedQueries: [],
+      fallbackUsed: false,
+      cacheHit: false,
+      retryCount: 0,
+      blocked: providerError.type === "blocked",
+      queryVariantCount: context.queryPlan.variants.length,
+      summary: {
+        rawCount: 0,
+        normalizedCount: 0,
+        filteredOutCount: 0,
+        invalidCount: 0,
+      },
+    },
   });
 }
 

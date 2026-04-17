@@ -13,6 +13,7 @@ import {
   MarketAnalysis,
   MarketListing,
   MarketProviderResultSnapshot,
+  ProviderDebugInfo,
   ProviderMode,
   SearchQueryPlan,
   SearchResponse,
@@ -84,6 +85,130 @@ function setCachedSearchResponse(cacheKey: string, value: SearchResponse) {
     value,
     expiresAt: Date.now() + SEARCH_CACHE_TTL_MS,
   });
+}
+
+function extractRawListingTitle(rawItem: unknown): string | undefined {
+  if (!rawItem || typeof rawItem !== "object") {
+    return undefined;
+  }
+
+  const candidate = rawItem as Record<string, unknown>;
+  const value =
+    candidate.titleText ??
+    candidate.subject ??
+    candidate.title ??
+    candidate.name;
+
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function extractRawListingUrl(rawItem: unknown): string | undefined {
+  if (!rawItem || typeof rawItem !== "object") {
+    return undefined;
+  }
+
+  const candidate = rawItem as Record<string, unknown>;
+  const value =
+    candidate.itemUrl ??
+    candidate.productUrl ??
+    candidate.productUrl ??
+    candidate.url;
+
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function createBaseProviderDebug(
+  result: Awaited<ReturnType<typeof runMarketDataSource>>,
+): ProviderDebugInfo {
+  return {
+    market: result.summary.sourceMarket,
+    attemptedQueries: [],
+    fallbackUsed: false,
+    cacheHit: false,
+    retryCount: 0,
+    blocked: result.summary.status === "blocked",
+    queryVariantCount: 0,
+    summary: {
+      rawCount: result.collector.rawItems.length,
+      normalizedCount: result.normalized.stats.normalizedCount,
+      filteredOutCount: result.normalized.stats.filteredOutCount,
+      invalidCount: result.normalized.stats.invalidCount,
+      salvagedCount: result.normalized.stats.salvagedCount,
+      parserOutputCount: result.collector.rawItems.length,
+      dropReasons: result.normalized.dropReasons,
+    },
+  };
+}
+
+function enhanceMarketDebugSnapshots(
+  marketResults: MarketProviderResultSnapshot[],
+  providerResults: Awaited<ReturnType<typeof runMarketDataSource>>[],
+  listings: MarketListing[],
+): MarketProviderResultSnapshot[] {
+  return marketResults.map((result) => {
+    const providerResult = providerResults.find(
+      (entry) => entry.summary.sourceMarket === result.sourceMarket,
+    );
+
+    if (!providerResult) {
+      return result;
+    }
+
+    const finalListings = listings.filter((listing) => listing.sourceMarket === result.sourceMarket);
+    const collectorMeta = providerResult.collector.meta as Record<string, unknown>;
+    const debug = result.debug ?? createBaseProviderDebug(providerResult);
+
+    return {
+      ...result,
+      debug: {
+        ...debug,
+        summary: {
+          ...(debug.summary ?? {}),
+          rawCount: debug.summary?.rawCount ?? providerResult.collector.rawItems.length,
+          parserOutputCount:
+            debug.summary?.parserOutputCount ?? providerResult.collector.rawItems.length,
+          normalizedCount: providerResult.normalized.stats.normalizedCount,
+          filteredOutCount: providerResult.normalized.stats.filteredOutCount,
+          invalidCount: providerResult.normalized.stats.invalidCount,
+          salvagedCount: providerResult.normalized.stats.salvagedCount,
+          finalCount: finalListings.length,
+          renderer:
+            typeof debug.summary?.renderer === "string"
+              ? debug.summary.renderer
+              : typeof collectorMeta.renderer === "string"
+                ? collectorMeta.renderer
+                : undefined,
+          rawSampleTitles: providerResult.collector.rawItems
+            .map((item) => extractRawListingTitle(item))
+            .filter((value): value is string => Boolean(value))
+            .slice(0, 3),
+          normalizedSampleTitles: providerResult.normalized.listings
+            .map((listing) => listing.title)
+            .slice(0, 3),
+          finalSampleTitles: finalListings.map((listing) => listing.title).slice(0, 3),
+          finalSampleUrls: finalListings.map((listing) => listing.itemUrl).slice(0, 3),
+          dropReasons: providerResult.normalized.dropReasons ?? debug.summary?.dropReasons,
+          browserExecutablePath:
+            typeof debug.summary?.browserExecutablePath === "string"
+              ? debug.summary.browserExecutablePath
+              : typeof collectorMeta.browserExecutablePath === "string"
+                ? collectorMeta.browserExecutablePath
+                : undefined,
+          browserLaunchErrors:
+            debug.summary?.browserLaunchErrors ??
+            (Array.isArray(collectorMeta.browserLaunchErrors)
+              ? (collectorMeta.browserLaunchErrors as string[])
+              : undefined),
+        },
+      },
+    };
+  });
+}
+
+function shouldCacheSearchResponse(response: SearchResponse): boolean {
+  return !response.marketResults.some((result) =>
+    ["error", "timeout", "blocked"].includes(result.status),
+  );
 }
 
 function dedupeListings(listings: MarketListing[]): MarketListing[] {
@@ -255,10 +380,11 @@ function buildMarketSnapshots(
       accumulator.set(key, (accumulator.get(key) ?? 0) + 1);
       return accumulator;
     }, new Map<string, number>());
-    const debug = result.collector.debug
-      ? {
-          ...result.collector.debug,
-          attemptedQueries: result.collector.debug.attemptedQueries.map((attempt) => {
+    const baseDebug = result.collector.debug ?? createBaseProviderDebug(result);
+    const collectorMeta = result.collector.meta as Record<string, unknown>;
+    const debug = {
+      ...baseDebug,
+      attemptedQueries: baseDebug.attemptedQueries.map((attempt) => {
             const normalizedResultCount = variantCounts.get(attempt.variantKey) ?? 0;
 
             return {
@@ -267,28 +393,35 @@ function buildMarketSnapshots(
               filteredOutCount: Math.max(attempt.rawResultCount - normalizedResultCount, 0),
             };
           }),
-          summary: {
-            ...result.collector.debug.summary,
-            rawCount:
-              result.collector.debug.summary?.rawCount ?? result.collector.rawItems.length,
-            normalizedCount: result.normalized.stats.normalizedCount,
-            filteredOutCount: result.normalized.stats.filteredOutCount,
-            invalidCount: result.normalized.stats.invalidCount,
-            salvagedCount: result.normalized.stats.salvagedCount,
-            requestedUrls: Array.from(
-              new Set([
-                ...(result.collector.debug.summary?.requestedUrls ?? []),
-                ...result.collector.debug.attemptedQueries.flatMap(
-                  (attempt) => attempt.requestedUrls ?? [],
-                ),
-              ]),
+      summary: {
+        ...baseDebug.summary,
+        rawCount:
+          baseDebug.summary?.rawCount ?? result.collector.rawItems.length,
+        parserOutputCount:
+          baseDebug.summary?.parserOutputCount ?? result.collector.rawItems.length,
+        normalizedCount: result.normalized.stats.normalizedCount,
+        filteredOutCount: result.normalized.stats.filteredOutCount,
+        invalidCount: result.normalized.stats.invalidCount,
+        salvagedCount: result.normalized.stats.salvagedCount,
+        renderer:
+          typeof baseDebug.summary?.renderer === "string"
+            ? baseDebug.summary.renderer
+            : typeof collectorMeta.renderer === "string"
+              ? collectorMeta.renderer
+              : undefined,
+        requestedUrls: Array.from(
+          new Set([
+            ...(baseDebug.summary?.requestedUrls ?? []),
+            ...baseDebug.attemptedQueries.flatMap(
+              (attempt) => attempt.requestedUrls ?? [],
             ),
-            dropReasons:
-              result.normalized.dropReasons ??
-              result.collector.debug.summary?.dropReasons,
-          },
-        }
-      : undefined;
+          ]),
+        ),
+        dropReasons:
+          result.normalized.dropReasons ??
+          baseDebug.summary?.dropReasons,
+      },
+    };
 
     return {
       ...result.summary,
@@ -364,7 +497,6 @@ function buildSearchResponse(
   debugCacheHit: boolean,
   totalDurationMs: number,
 ): SearchResponse {
-  const marketResults = buildMarketSnapshots(providerResults);
   const listings = sortListings(
     dedupeListings(
       enrichListingsWithKrw(
@@ -372,6 +504,11 @@ function buildSearchResponse(
         costs,
       ),
     ),
+  );
+  const marketResults = enhanceMarketDebugSnapshots(
+    buildMarketSnapshots(providerResults),
+    providerResults,
+    listings,
   );
   const marketAnalyses = marketDataSources.map((source) =>
     calculateMarketAnalysis(
@@ -418,6 +555,11 @@ function buildSearchResponse(
       totalDurationMs,
       queryPlan,
       providerDebug: marketResults.flatMap((result) => (result.debug ? [result.debug] : [])),
+      environment: {
+        nodeVersion: process.version,
+        platform: process.platform,
+        deploymentTarget: process.env.VERCEL ? "vercel" : "local",
+      },
     },
   };
 }
@@ -483,7 +625,9 @@ export async function searchResellOpportunities(
     Date.now() - startedAt,
   );
 
-  setCachedSearchResponse(cacheKey, response);
+  if (shouldCacheSearchResponse(response)) {
+    setCachedSearchResponse(cacheKey, response);
+  }
   return response;
 }
 

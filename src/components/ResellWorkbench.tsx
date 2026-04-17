@@ -452,6 +452,53 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
                         fallback {provider.fallbackUsed ? "used" : "not used"} / cache{" "}
                         {provider.cacheHit ? "hit" : "miss"}
                       </p>
+                      <div className="mt-3 space-y-1 text-xs">
+                        <p>
+                          status{" "}
+                          <strong className="text-ink">
+                            {providerStatusLabel(
+                              data.marketResults.find((entry) => entry.sourceMarket === provider.market)
+                                ?.status ?? "error",
+                            )}
+                          </strong>
+                        </p>
+                        <p>
+                          renderer{" "}
+                          <strong className="text-ink">
+                            {provider.summary?.renderer ?? "n/a"}
+                          </strong>
+                        </p>
+                        <p>
+                          raw / normalized / final{" "}
+                          <strong className="text-ink">
+                            {provider.summary?.rawCount ?? 0} / {provider.summary?.normalizedCount ?? 0} /{" "}
+                            {provider.summary?.finalCount ?? 0}
+                          </strong>
+                        </p>
+                        <p>
+                          filtered / invalid{" "}
+                          <strong className="text-ink">
+                            {provider.summary?.filteredOutCount ?? 0} / {provider.summary?.invalidCount ?? 0}
+                          </strong>
+                        </p>
+                        <p>
+                          browser fallback{" "}
+                          <strong className="text-ink">
+                            {provider.summary?.browserFallbackUsed ? "used" : "not used"}
+                          </strong>
+                        </p>
+                        <p>
+                          response / final url{" "}
+                          <strong className="text-ink">
+                            {provider.summary?.responseStatus ?? "n/a"}
+                          </strong>
+                        </p>
+                        {provider.summary?.finalUrl ? (
+                          <p className="break-all">
+                            <strong className="text-ink">{provider.summary.finalUrl}</strong>
+                          </p>
+                        ) : null}
+                      </div>
                       <div className="mt-3 space-y-2">
                         {provider.attemptedQueries.map((attempt) => (
                           <div
@@ -469,6 +516,40 @@ export function ResellWorkbench({ initialData }: ResellWorkbenchProps) {
                           </div>
                         ))}
                       </div>
+                      {provider.summary?.dropReasons && provider.summary.dropReasons.length > 0 ? (
+                        <div className="mt-3 rounded-xl bg-mist px-3 py-2 text-xs">
+                          <p className="font-medium text-ink">drop reasons</p>
+                          <p className="mt-1">
+                            {provider.summary.dropReasons
+                              .map((reason) => `${reason.reason} x${reason.count}`)
+                              .join(", ")}
+                          </p>
+                        </div>
+                      ) : null}
+                      {provider.summary?.finalSampleTitles &&
+                      provider.summary.finalSampleTitles.length > 0 ? (
+                        <div className="mt-3 rounded-xl bg-mist px-3 py-2 text-xs">
+                          <p className="font-medium text-ink">final sample</p>
+                          <div className="mt-1 space-y-1">
+                            {provider.summary.finalSampleTitles.map((title, index) => (
+                              <p key={`${provider.market}-sample-${index}`}>
+                                {index + 1}. {title}
+                              </p>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      {provider.summary?.browserLaunchErrors &&
+                      provider.summary.browserLaunchErrors.length > 0 ? (
+                        <div className="mt-3 rounded-xl border border-coral/20 bg-coral/10 px-3 py-2 text-xs text-coral">
+                          <p className="font-medium">browser launch errors</p>
+                          <div className="mt-1 space-y-1">
+                            {provider.summary.browserLaunchErrors.map((message, index) => (
+                              <p key={`${provider.market}-launch-${index}`}>{message}</p>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   ))}
                 </div>
